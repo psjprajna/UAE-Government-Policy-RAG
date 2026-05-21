@@ -127,12 +127,56 @@ uv run python scripts/build_index.py --reset               # drop the existing c
 - First run downloads ~1.4 GB of model weights to the HuggingFace cache (`~/.cache/huggingface/hub/`). Subsequent runs use the local cache.
 - Output: a persistent ChromaDB collection at `data/chroma_db/` (cosine space). Exit codes: `0` if every source produced ≥1 chunk and upserted; `1` on failures or dimension guard; `2` on bad CLI usage.
 
+Sample output (real e5-large tokenizer, full corpus):
+
+```
+slug               articles  chunks  mode
+-----------------  --------  ------  --------
+labour-law-en      74        86      article
+labour-law-ar      74        88      article
+mohre-resolutions  39        46      article
+visa-regulations   65        65      fallback
+
+upserted: 285 | collection count: 285
+```
+
+`articles` counts distinct `article_id`s (or fallback section count for unstructured sources); `chunks` is the total record count after token-aware paragraph + sentence splits. `mode` is the dominant chunk mode.
+
+### Sample query results
+
+The index is queried directly via `config.get_embeddings()` + `config.get_vector_index(...)`. Top-3 hits for representative EN and AR questions (cosine similarity in parentheses):
+
+```
+EN: "annual leave entitlement"
+  mohre-resolutions::art-19                   (0.866)
+  labour-law-en::art-29#p1-p1s1-s21           (0.865)
+  mohre-resolutions::art-18                   (0.864)
+
+EN: "end of service gratuity"
+  labour-law-en::art-52                       (0.868)
+  labour-law-en::art-51                       (0.860)
+  mohre-resolutions::art-30                   (0.824)
+
+AR: "المادة 29"
+  labour-law-ar::art-26                       (0.827)
+  labour-law-ar::art-29                       (0.826)
+  labour-law-ar::art-27                       (0.825)
+
+AR: "الإجازة السنوية"  (annual leave)
+  labour-law-ar::art-29#p1-p1s1-s11           (0.840)
+  labour-law-ar::art-29#p1-p1s12-s16          (0.836)
+  labour-law-ar::art-33                       (0.821)
+```
+
+Labour Law Article 29 is the annual-leave article and Article 51 is end-of-service gratuity; MOHRE Articles 18-19 / 30 are the executive regulations that elaborate them. Both languages route through the same multilingual embedder — no per-language switch at query time.
+
 ## Tests
 
 ```bash
-uv run pytest                     # full suite
-uv run pytest tests/fitness/      # architectural boundary tests only
-uv run pytest tests/e2e/          # API end-to-end smoke
+uv run pytest                                  # full suite (skips slow tests)
+uv run pytest tests/fitness/                   # architectural boundary tests only
+uv run pytest tests/e2e/                       # API end-to-end smoke
+uv run pytest -m "slow and adapter_local"      # opt-in: loads the real embedder (~3 s after first cache)
 ```
 
 ## Repository layout
