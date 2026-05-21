@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
+    "pdfplumber>=0.11.9",
 ]
 
 [project.optional-dependencies]
@@ -58,3 +59,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B011"]
+# Intentional Arabic codepoints in source and tests — ambiguity warnings are noise here.
+"src/uae_rag/ingestion/parser.py" = ["RUF001"]
+"tests/unit/test_parser.py" = ["RUF001", "RUF003"]
