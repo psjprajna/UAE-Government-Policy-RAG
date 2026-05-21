@@ -35,6 +35,7 @@ class DocumentSource:
     language: str
     url: str
     local_filename: str
+    requires_browser: bool = False
 
 
 class DocumentRecord(BaseModel):
@@ -52,17 +53,19 @@ class DocumentRecord(BaseModel):
 SOURCES: tuple[DocumentSource, ...] = (
     DocumentSource(
         slug="labour-law-en",
-        title="UAE Labour Law (Federal Decree-Law No. 33 of 2021, with amendments) — English",
+        title="UAE Labour Law (Federal Decree-Law No. 33 of 2021) — English",
         language="en",
-        url="https://mohre.gov.ae/assets/download/8cd7cf08/Federal%20Decree-Law%20No.%2033%20of%202021%20Regarding%20the%20Regulation%20of%20Employment%20Relationship%20and%20its%20amendments.pdf.aspx",
+        url="https://uaelegislation.gov.ae/en/legislations/1541/download",
         local_filename="labour-law-en.pdf",
+        requires_browser=True,
     ),
     DocumentSource(
         slug="labour-law-ar",
         title="قانون العمل الاتحادي رقم 33 لسنة 2021 — Arabic",
         language="ar",
-        url="https://www.mohre.gov.ae/assets/download/3ee9dbb1/labour-law-ar.aspx",
+        url="https://uaelegislation.gov.ae/ar/legislations/1541/download",
         local_filename="labour-law-ar.pdf",
+        requires_browser=True,
     ),
     DocumentSource(
         slug="mohre-resolutions",
@@ -70,6 +73,7 @@ SOURCES: tuple[DocumentSource, ...] = (
         language="en",
         url="https://www.mohre.gov.ae/assets/download/46bdbfda/Cabinet%20Resolution%20_Executive%20Regulations%20Decree-Law%20No.%2033.pdf.aspx",
         local_filename="mohre-resolutions.pdf",
+        requires_browser=True,
     ),
     DocumentSource(
         slug="visa-regulations",
@@ -77,6 +81,7 @@ SOURCES: tuple[DocumentSource, ...] = (
         language="en",
         url="https://icp.gov.ae/wp-content/uploads/2024/05/%D8%AF%D9%84%D9%8A%D9%84-%D8%A7%D9%84%D8%AE%D8%AF%D9%85%D8%A7%D8%AA-%D8%A5%D8%B5%D8%AF%D8%A7%D8%B1-4.2-2024EN.pdf",
         local_filename="visa-regulations.pdf",
+        requires_browser=False,
     ),
 )
 

@@ -2,7 +2,7 @@
 
 A retrieval-augmented question-answering service over public UAE government policy documents — UAE Labour Law (Federal Law No. 33 of 2021), MOHRE regulations, and UAE Visa regulations. Accepts questions in Arabic or English and returns grounded answers with article-level citations.
 
-> **Current capability (through Phase 1):** walking skeleton + reproducible corpus. `POST /query` still returns a deterministic stubbed answer (the real pipeline lands in Phase 7). A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
+> **Current capability (through Phase 1):** walking skeleton + reproducible corpus. `POST /query` still returns a deterministic stubbed answer (the real pipeline lands in Phase 7). A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
 
 ## Why this exists
 
@@ -49,6 +49,19 @@ Swagger UI is auto-served at `http://localhost:8000/docs`.
 
 The four indexed PDFs are downloaded from their official UAE government sources and verified by SHA-256 against `data/registry.json` (committed). The PDFs themselves live in `data/raw/` and are gitignored.
 
+### One-time setup (browser-fetched sources)
+
+`labour-law-en`, `labour-law-ar`, and `mohre-resolutions` are served from portals (`uaelegislation.gov.ae`, `mohre.gov.ae`) that gate their downloads behind a JavaScript challenge that plain HTTP clients cannot defeat. They go through a Playwright + headless chromium adapter (`src/uae_rag/adapters/local/browser_fetcher.py`). Install once:
+
+```bash
+uv sync --extra fetch --extra dev          # adds the playwright Python package
+uv run playwright install chromium         # downloads the chromium binary (~150 MB, one-time per machine)
+```
+
+`visa-regulations` is served directly by ICP and uses stdlib `urllib` — no browser needed.
+
+### Running the fetcher
+
 ```bash
 uv run python scripts/fetch_corpus.py                     # download anything missing and verify
 uv run python scripts/fetch_corpus.py --skip-download     # verify only what's on disk; never hit the network
@@ -60,13 +73,13 @@ Exit codes: `0` if every selected source verifies; `1` if any source fails to do
 
 ### Manual-drop fallback
 
-The Arabic edition of the Labour Law (`labour-law-ar`) is served from a MOHRE asset URL that returns `404` to anonymous clients at the time of this release. To populate it manually:
+If a portal upgrades its bot detection or the chromium install is unavailable on a machine, you can drop the file manually:
 
-1. Visit the MOHRE labour-law page (Arabic) and save the PDF.
-2. Place the file at `data/raw/labour-law-ar.pdf`.
-3. Run `uv run python scripts/fetch_corpus.py --skip-download --source labour-law-ar` to register its SHA.
+1. Open the source URL in a real browser and save the PDF (URLs are in `src/uae_rag/ingestion/registry.py:SOURCES`).
+2. Place it at `data/raw/<local_filename>.pdf`.
+3. Run `uv run python scripts/fetch_corpus.py --source <slug> --skip-download` to register its SHA.
 
-The same procedure applies to any other source that becomes auth-walled in the future.
+The same procedure applies to any source that becomes harder to fetch automatically in the future.
 
 ## Tests
 

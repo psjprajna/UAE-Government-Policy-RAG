@@ -14,6 +14,9 @@ import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
 
+# scripts/ sits outside the domain layer enforced by tests/fitness/test_layer_boundaries.py,
+# so direct imports from adapters/ are permitted here (and only here, plus config.py).
+from uae_rag.adapters.local.browser_fetcher import BrowserFetcher, BrowserFetchError
 from uae_rag.ingestion.registry import (
     SOURCES,
     DocumentSource,
@@ -42,7 +45,7 @@ def _selected_sources(requested: list[str]) -> list[DocumentSource]:
     return [find_source(slug) for slug in requested]
 
 
-def _stream_to_tmp(url: str, target: Path) -> None:
+def _urllib_to_tmp(url: str, target: Path) -> None:
     tmp = target.with_suffix(target.suffix + ".tmp")
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
@@ -69,6 +72,18 @@ def _stream_to_tmp(url: str, target: Path) -> None:
     tmp.replace(target)
 
 
+def _download(source: DocumentSource, target: Path) -> None:
+    """Dispatch to the right fetcher: BrowserFetcher for JS-walled sources, urllib otherwise."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.requires_browser:
+        try:
+            BrowserFetcher(timeout_seconds=TIMEOUT_SECONDS).download(source.url, target)
+        except BrowserFetchError as exc:
+            raise FetchError(f"browser: {exc}") from exc
+    else:
+        _urllib_to_tmp(source.url, target)
+
+
 def _process(
     source: DocumentSource,
     *,
@@ -82,8 +97,7 @@ def _process(
     if not target.exists():
         if skip_download:
             raise FetchError("file missing and --skip-download set")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        _stream_to_tmp(source.url, target)
+        _download(source, target)
 
     existed_before = source.slug in registry
     record = verify_or_record(source, target, registry, force=force)
