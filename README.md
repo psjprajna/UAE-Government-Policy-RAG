@@ -2,7 +2,7 @@
 
 A retrieval-augmented question-answering service over public UAE government policy documents — UAE Labour Law (Federal Law No. 33 of 2021), MOHRE regulations, and UAE Visa regulations. Accepts questions in Arabic or English and returns grounded answers with article-level citations.
 
-> **Current capability (through Phase 4 slice 2):** walking skeleton + reproducible corpus + heading-aware parsing/chunking + a persistent ChromaDB vector index of the full corpus + a live hybrid retriever (BM25 + dense, fused with Reciprocal Rank Fusion at k=60). `POST /query` still returns a deterministic stubbed answer (the real pipeline lands in Phase 7), but `config.get_retriever(...)` now wires up the production retrieval path and is exercised end-to-end against the real Chroma collection. A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. A hybrid PDF parser (pdfplumber for English, pypdfium2 for Arabic) extracts text, detects `Article (N)` / `المادة (N)` headings, and the chunker emits embedding-ready chunks with a deterministic id, breadcrumb-prefixed text, an injectable token counter, and sentence-level secondary split for paragraphs that overflow the cap. `scripts/build_index.py` embeds the full corpus (285 chunks) with `intfloat/multilingual-e5-large` and persists vectors to `data/chroma_db/`; the embedding model can be swapped via `LOCAL_EMBEDDINGS_*` env vars and the index refuses an incompatible swap unless re-run with `--reset`. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
+> **Current capability (through Phase 5):** walking skeleton + reproducible corpus + heading-aware parsing/chunking + a persistent ChromaDB vector index of the full corpus + a live hybrid retriever (BM25 + dense, fused with Reciprocal Rank Fusion at k=60) + a cross-encoder reranker (`BAAI/bge-reranker-v2-m3`) that re-scores the hybrid top-20 before they reach the generator. `POST /query` still returns a deterministic stubbed answer (the real pipeline lands in Phase 7), but `config.get_retriever(...)` and `config.get_reranker()` now wire up the production retrieval + rerank path and are exercised end-to-end against the real Chroma collection. A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. A hybrid PDF parser (pdfplumber for English, pypdfium2 for Arabic) extracts text, detects `Article (N)` / `المادة (N)` headings, and the chunker emits embedding-ready chunks with a deterministic id, breadcrumb-prefixed text, an injectable token counter, and sentence-level secondary split for paragraphs that overflow the cap. `scripts/build_index.py` embeds the full corpus (285 chunks) with `intfloat/multilingual-e5-large` and persists vectors to `data/chroma_db/`; the embedding model can be swapped via `LOCAL_EMBEDDINGS_*` env vars and the index refuses an incompatible swap unless re-run with `--reset`. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
 
 ## Why this exists
 
@@ -170,9 +170,9 @@ AR: "الإجازة السنوية"  (annual leave)
 
 Labour Law Article 29 is the annual-leave article and Article 51 is end-of-service gratuity; MOHRE Articles 18-19 / 30 are the executive regulations that elaborate them. Both languages route through the same multilingual embedder — no per-language switch at query time.
 
-## Hybrid retrieval
+## Hybrid retrieval + reranking
 
-`config.get_retriever(chunks=..., embedder=..., vector_index=...)` returns a `RetrievalPort` that runs both a sparse (BM25Okapi) and a dense (e5-large + ChromaDB) leg over the top-50 candidates each, then fuses the rankings with Reciprocal Rank Fusion at `k=60` (ADR-0004). The fused list is returned ranked by descending RRF score, with `chunk_id` as a deterministic tie-break. Multi-query rewriting ships in Phase 6 with the LLM port.
+`config.get_retriever(chunks=..., embedder=..., vector_index=...)` returns a `RetrievalPort` that runs both a sparse (BM25Okapi) and a dense (e5-large + ChromaDB) leg over the top-50 candidates each, then fuses the rankings with Reciprocal Rank Fusion at `k=60` (ADR-0004). The fused list is returned ranked by descending RRF score, with `chunk_id` as a deterministic tie-break. `config.get_reranker()` returns a `RerankerPort` backed by `BAAI/bge-reranker-v2-m3` via a sentence-transformers `CrossEncoder` (ADR-0007); `uae_rag.retrieval.rerank.RerankRetriever` composes the two and itself satisfies `RetrievalPort`, so `/query` stays agnostic to whether reranking is on, and a Phase 9 swap to Cohere Rerank replaces the local CrossEncoder without domain changes. Reranker failures fall back to the unreranked hybrid hits — `/query` always returns something. Multi-query rewriting ships in Phase 6 with the LLM port.
 
 ```mermaid
 flowchart LR
@@ -181,7 +181,8 @@ flowchart LR
   MQ --> DE[dense leg<br/>e5-large + Chroma, top-50]
   BM --> RRF[RRF fusion<br/>k=60]
   DE --> RRF
-  RRF --> OUT[top-20 to reranker<br/>Phase 5]
+  RRF --> RR[cross-encoder reranker<br/>BGE-v2-m3, top-10]
+  RR --> OUT[top-N to generator<br/>Phase 6+]
   classDef deferred stroke-dasharray:4 4,color:#888;
   class MQ deferred;
 ```
@@ -190,28 +191,28 @@ flowchart LR
 
 ```
 EN: "annual leave entitlement"
-  rank  bm25                                       dense                                      hybrid (RRF)
-  1     mohre-resolutions::art-19                  mohre-resolutions::art-19                  mohre-resolutions::art-19
-  2     labour-law-en::art-29#p1-p1s1-s21          labour-law-en::art-29#p1-p1s1-s21          labour-law-en::art-29#p1-p1s1-s21
-  3     mohre-resolutions::art-18                  mohre-resolutions::art-18                  mohre-resolutions::art-18
+  rank  bm25                                       dense                                      hybrid (RRF)                               reranked (BGE)
+  1     mohre-resolutions::art-19                  mohre-resolutions::art-19                  mohre-resolutions::art-19                  mohre-resolutions::art-18
+  2     labour-law-en::art-29#p1-p1s1-s21          labour-law-en::art-29#p1-p1s1-s21          labour-law-en::art-29#p1-p1s1-s21          labour-law-en::art-29#p1-p1s1-s21
+  3     mohre-resolutions::art-18                  mohre-resolutions::art-18                  mohre-resolutions::art-18                  mohre-resolutions::art-19
 
 EN: "end of service gratuity"
-  rank  bm25                                       dense                                      hybrid (RRF)
-  1     labour-law-en::art-51                      labour-law-en::art-52                      labour-law-en::art-51
-  2     labour-law-en::art-52                      labour-law-en::art-51                      labour-law-en::art-52
-  3     labour-law-en::art-37#p1-p1s12-s12         mohre-resolutions::art-30                  labour-law-en::art-37#p1-p1s12-s12
+  rank  bm25                                       dense                                      hybrid (RRF)                               reranked (BGE)
+  1     labour-law-en::art-51                      labour-law-en::art-52                      labour-law-en::art-51                      labour-law-en::art-51
+  2     labour-law-en::art-52                      labour-law-en::art-51                      labour-law-en::art-52                      labour-law-en::art-52
+  3     labour-law-en::art-37#p1-p1s12-s12         mohre-resolutions::art-30                  labour-law-en::art-37#p1-p1s12-s12         labour-law-en::art-68
 
 AR: "المادة 29"
-  rank  bm25                                       dense                                      hybrid (RRF)
-  1     labour-law-ar::art-29#p1-p1s12-s16         labour-law-ar::art-26                      labour-law-ar::art-29#p1-p1s1-s11
-  2     labour-law-ar::art-29#p1-p1s1-s11          labour-law-ar::art-29#p1-p1s1-s11          labour-law-ar::art-29#p1-p1s12-s16
-  3     labour-law-ar::art-54#p1-p1s1-s3           labour-law-ar::art-27                      labour-law-ar::art-27
+  rank  bm25                                       dense                                      hybrid (RRF)                               reranked (BGE)
+  1     labour-law-ar::art-29#p1-p1s12-s16         labour-law-ar::art-26                      labour-law-ar::art-29#p1-p1s1-s11          labour-law-ar::art-29#p1-p1s1-s11
+  2     labour-law-ar::art-29#p1-p1s1-s11          labour-law-ar::art-29#p1-p1s1-s11          labour-law-ar::art-29#p1-p1s12-s16         labour-law-ar::art-29#p1-p1s12-s16
+  3     labour-law-ar::art-54#p1-p1s1-s3           labour-law-ar::art-27                      labour-law-ar::art-27                      labour-law-ar::art-9#p1-p1s6-s7
 
 AR: "الإجازة السنوية"
-  rank  bm25                                       dense                                      hybrid (RRF)
-  1     labour-law-ar::art-29#p1-p1s12-s16         labour-law-ar::art-29#p1-p1s1-s11          labour-law-ar::art-29#p1-p1s12-s16
-  2     —                                          labour-law-ar::art-29#p1-p1s12-s16         labour-law-ar::art-29#p1-p1s1-s11
-  3     —                                          labour-law-ar::art-33                      labour-law-ar::art-33
+  rank  bm25                                       dense                                      hybrid (RRF)                               reranked (BGE)
+  1     labour-law-ar::art-29#p1-p1s12-s16         labour-law-ar::art-29#p1-p1s1-s11          labour-law-ar::art-29#p1-p1s12-s16         labour-law-ar::art-29#p1-p1s1-s11
+  2     —                                          labour-law-ar::art-29#p1-p1s12-s16         labour-law-ar::art-29#p1-p1s1-s11          labour-law-ar::art-29#p1-p1s12-s16
+  3     —                                          labour-law-ar::art-33                      labour-law-ar::art-33                      labour-law-en::art-29#p1-p1s22-s27
 ```
 
 Gold chunks (the article the question actually asks about): `labour-law-en::art-29` for the EN annual-leave query, `labour-law-en::art-51` for end-of-service gratuity, `labour-law-ar::art-29` for both Arabic queries.
@@ -219,14 +220,16 @@ Gold chunks (the article the question actually asks about): `labour-law-en::art-
 ```
 Where the gold chunk ranks (lower = better; bar length = rank; — = not in top 50)
 
-                                     bm25      dense     hybrid
-EN: annual leave entitlement         ██ 2      ██ 2      ██ 2
-EN: end of service gratuity          █ 1       ██ 2      █ 1
-AR: المادة 29                        █ 1       ██ 2      █ 1
-AR: الإجازة السنوية                  █ 1       █ 1       █ 1
+                                     bm25      dense     hybrid    reranked
+EN: annual leave entitlement         ██ 2      ██ 2      ██ 2      ██ 2
+EN: end of service gratuity          █ 1       ██ 2      █ 1       █ 1
+AR: المادة 29                        █ 1       ██ 2      █ 1       █ 1
+AR: الإجازة السنوية                  █ 1       █ 1       █ 1       █ 1
 ```
 
 The AR exact-reference query (`المادة 29`) is the case where BM25 wins decisively over dense — dense ranks `art-26` and `art-27` (semantically adjacent articles) above the literal match. Hybrid keeps BM25's lexical precision while picking up the dense leg's recall on phrasal queries.
+
+The reranker's contribution on this corpus isn't lifting the gold chunk — hybrid already places it at rank 1 or 2 for all four queries. What the cross-encoder *does* change is the rest of the top-3: it replaces adjacent-article noise (`art-27`, `art-33`, `art-37`) with more semantically targeted picks (`art-9`, `art-68`), reorders sub-chunks within the same article so the directly relevant slice surfaces first (AR `الإجازة السنوية` promotes `art-29#p1-p1s1-s11` over `art-29#p1-p1s12-s16`), and on the Arabic-leave query surfaces the English Article 29 chunk in the reranked top-3 — true cross-language semantic relevance, which BGE-v2-m3 is trained for. Phase 8 RAGAS will quantify the diff over the 50-question golden set.
 
 ## Tests
 
@@ -234,7 +237,7 @@ The AR exact-reference query (`المادة 29`) is the case where BM25 wins dec
 uv run pytest                                  # full suite (skips slow tests)
 uv run pytest tests/fitness/                   # architectural boundary tests only
 uv run pytest tests/e2e/                       # API end-to-end smoke
-uv run pytest -m "slow and adapter_local"      # opt-in: loads the real embedder (~3 s after first cache)
+uv run pytest -m "slow and adapter_local"      # opt-in: loads the real embedder + reranker (~10 s after first cache)
 ```
 
 ## Repository layout
