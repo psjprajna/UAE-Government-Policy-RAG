@@ -2,7 +2,7 @@
 
 A retrieval-augmented question-answering service over public UAE government policy documents — UAE Labour Law (Federal Law No. 33 of 2021), MOHRE regulations, and UAE Visa regulations. Accepts questions in Arabic or English and returns grounded answers with article-level citations.
 
-> **Current capability (through Phase 2):** walking skeleton + reproducible corpus + heading-aware parsing/chunking. `POST /query` still returns a deterministic stubbed answer (the real pipeline lands in Phase 7). A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. A hybrid PDF parser (pdfplumber for English, pypdfium2 for Arabic) extracts text, detects `Article (N)` / `المادة (N)` headings, and the chunker emits embedding-ready chunks with a deterministic id and breadcrumb-prefixed text. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
+> **Current capability (through Phase 3 slice 2):** walking skeleton + reproducible corpus + heading-aware parsing/chunking + a persistent ChromaDB vector index of the full corpus. `POST /query` still returns a deterministic stubbed answer (the real pipeline lands in Phase 7). A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. A hybrid PDF parser (pdfplumber for English, pypdfium2 for Arabic) extracts text, detects `Article (N)` / `المادة (N)` headings, and the chunker emits embedding-ready chunks with a deterministic id, breadcrumb-prefixed text, an injectable token counter, and sentence-level secondary split for paragraphs that overflow the cap. `scripts/build_index.py` embeds the full corpus (285 chunks) with `intfloat/multilingual-e5-large` and persists vectors to `data/chroma_db/`; the embedding model can be swapped via `LOCAL_EMBEDDINGS_*` env vars and the index refuses an incompatible swap unless re-run with `--reset`. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
 
 ## Why this exists
 
@@ -90,7 +90,8 @@ The parser (`src/uae_rag/ingestion/parser.py`) reads each PDF, detects article h
 - **AR article regex** matches the actual byte sequence pypdfium2 emits for the Arabic word for *article* (ALIF MEEM LAM ALIF DAL TEH-MARBUTA — LAM/MEEM swapped from canonical due to alif-lam ligature handling). The breadcrumb stored on each chunk uses the canonical ordering so citations render correctly.
 - **No chapter detection in v1**: the corpus PDFs don't expose chapter dividers in extracted text or PDF outlines, so the breadcrumb is `Article (N)` (or `المادة (N)`) only. ADR-0003's hierarchical goal is preserved for a later phase.
 - **Fallback**: when no article markers are found (currently: ICP Services Guide), the parser emits ~600-word section blocks with `breadcrumb = "{title} > Section {N}"` and `article_id = None`. Chunks carry `mode="fallback"` so downstream retrieval can weight them differently if needed.
-- **Sub-chunking**: articles whose body exceeds 600 words split on paragraph boundaries (`\n\n`); each sub-chunk inherits the parent breadcrumb and appends `#p{a}-p{b}` to its chunk id.
+- **Sub-chunking**: articles whose body exceeds the cap split first on paragraph boundaries (`\n\n`); each sub-chunk inherits the parent breadcrumb and appends `#p{a}-p{b}` to its chunk id. A paragraph that itself exceeds the cap is split on sentence boundaries (English `. ! ?` and Arabic `؟`) and the chunk id grows an `s{x}-s{y}` segment. A single sentence that still exceeds the cap is emitted as one oversize sub-chunk and logged at WARNING level.
+- **Token counter**: `chunk_articles` accepts a `count_tokens: Callable[[str], int]` parameter (default: word count via `str.split`). Phase 3's build script will pass the real e5-large tokenizer here so cap decisions track the embedder's actual budget.
 
 ### Preview the chunk output
 
@@ -104,20 +105,78 @@ Sample output:
 ```
 slug               articles  chunks  mode
 -----------------  --------  ------  --------
-labour-law-en      74        74      article
+labour-law-en      74        75      article
 labour-law-ar      74        74      article
-mohre-resolutions  39        39      article
+mohre-resolutions  39        41      article
 visa-regulations   65        65      fallback
 ```
 
 `mode` is the dominant chunk mode (`article`, `subchunk`, or `fallback`). Exit codes: `0` if every source produced ≥1 chunk; `1` if any source failed or produced none; `2` on unknown `--source` slug.
 
+## Build the vector index
+
+```bash
+uv run python scripts/build_index.py                       # full corpus → data/chroma_db/
+uv run python scripts/build_index.py --dry-run             # parse + chunk only; no model load, no write
+uv run python scripts/build_index.py --source SLUG         # restrict to one source (repeatable)
+uv run python scripts/build_index.py --reset               # drop the existing collection first
+```
+
+- Default embedder: `intfloat/multilingual-e5-large` (1024-dim, multilingual). E5 prefix convention is applied inside the adapter — domain code stays naive.
+- Swap embedders without code edits by setting `LOCAL_EMBEDDINGS_MODEL`, `LOCAL_EMBEDDINGS_DIMENSION`, `LOCAL_EMBEDDINGS_PASSAGE_PREFIX`, `LOCAL_EMBEDDINGS_QUERY_PREFIX`. A swap that changes the vector space requires `--reset`; the index refuses dimension mismatches with a clear error.
+- First run downloads ~1.4 GB of model weights to the HuggingFace cache (`~/.cache/huggingface/hub/`). Subsequent runs use the local cache.
+- Output: a persistent ChromaDB collection at `data/chroma_db/` (cosine space). Exit codes: `0` if every source produced ≥1 chunk and upserted; `1` on failures or dimension guard; `2` on bad CLI usage.
+
+Sample output (real e5-large tokenizer, full corpus):
+
+```
+slug               articles  chunks  mode
+-----------------  --------  ------  --------
+labour-law-en      74        86      article
+labour-law-ar      74        88      article
+mohre-resolutions  39        46      article
+visa-regulations   65        65      fallback
+
+upserted: 285 | collection count: 285
+```
+
+`articles` counts distinct `article_id`s (or fallback section count for unstructured sources); `chunks` is the total record count after token-aware paragraph + sentence splits. `mode` is the dominant chunk mode.
+
+### Sample query results
+
+The index is queried directly via `config.get_embeddings()` + `config.get_vector_index(...)`. Top-3 hits for representative EN and AR questions (cosine similarity in parentheses):
+
+```
+EN: "annual leave entitlement"
+  mohre-resolutions::art-19                   (0.866)
+  labour-law-en::art-29#p1-p1s1-s21           (0.865)
+  mohre-resolutions::art-18                   (0.864)
+
+EN: "end of service gratuity"
+  labour-law-en::art-52                       (0.868)
+  labour-law-en::art-51                       (0.860)
+  mohre-resolutions::art-30                   (0.824)
+
+AR: "المادة 29"
+  labour-law-ar::art-26                       (0.827)
+  labour-law-ar::art-29                       (0.826)
+  labour-law-ar::art-27                       (0.825)
+
+AR: "الإجازة السنوية"  (annual leave)
+  labour-law-ar::art-29#p1-p1s1-s11           (0.840)
+  labour-law-ar::art-29#p1-p1s12-s16          (0.836)
+  labour-law-ar::art-33                       (0.821)
+```
+
+Labour Law Article 29 is the annual-leave article and Article 51 is end-of-service gratuity; MOHRE Articles 18-19 / 30 are the executive regulations that elaborate them. Both languages route through the same multilingual embedder — no per-language switch at query time.
+
 ## Tests
 
 ```bash
-uv run pytest                     # full suite
-uv run pytest tests/fitness/      # architectural boundary tests only
-uv run pytest tests/e2e/          # API end-to-end smoke
+uv run pytest                                  # full suite (skips slow tests)
+uv run pytest tests/fitness/                   # architectural boundary tests only
+uv run pytest tests/e2e/                       # API end-to-end smoke
+uv run pytest -m "slow and adapter_local"      # opt-in: loads the real embedder (~3 s after first cache)
 ```
 
 ## Repository layout

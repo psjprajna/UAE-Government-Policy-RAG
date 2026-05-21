@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from uae_rag.ingestion.chunker import MAX_CHUNK_WORDS, Chunk, chunk_articles
@@ -141,3 +143,96 @@ def test_chunk_articles_returns_concrete_chunk_type(small_article: Article) -> N
     chunks = chunk_articles([small_article], source_slug="labour-law-en")
 
     assert all(isinstance(c, Chunk) for c in chunks)
+
+
+def test_count_tokens_callable_is_honored() -> None:
+    """Caller supplies a token counter; chunker honours it for cap decisions.
+
+    With ``count_tokens=len`` (char count) and an article whose body counts to
+    52 characters, ``max_tokens=30`` forces a paragraph-level split: two
+    sub-chunks instead of the single chunk that the default word-count
+    tokenizer would emit (body has fewer than 600 words).
+    """
+    paragraphs = ["sentence one.", "sentence two.", "sentence three.", "sentence four."]
+    article = Article(
+        article_id="7",
+        breadcrumb="Article (7)",
+        language="en",
+        page_start=3,
+        page_end=3,
+        body="\n\n".join(paragraphs),
+    )
+
+    # Default tokenizer (word count) leaves the article well under cap → 1 chunk.
+    default_chunks = chunk_articles([article], source_slug="labour-law-en")
+    assert len(default_chunks) == 1
+    assert default_chunks[0].mode == "article"
+
+    # Injected char-count tokenizer with low cap forces a paragraph-level split.
+    chunks = chunk_articles(
+        [article],
+        source_slug="labour-law-en",
+        count_tokens=len,
+        max_tokens=30,
+    )
+
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert chunk.mode == "subchunk"
+        # Each constituent paragraph (counted independently, per chunker contract) is ≤ cap.
+        body_after_breadcrumb = chunk.text.split("\n\n", 1)[1]
+        for paragraph in body_after_breadcrumb.split("\n\n"):
+            assert len(paragraph) <= 30
+
+
+def test_sentence_level_split_fires_on_oversize_paragraph() -> None:
+    """A single paragraph exceeding max_tokens splits on sentence boundaries."""
+    sentences = [f"This is sentence number {i}." for i in range(1, 11)]
+    paragraph = " ".join(sentences)  # one paragraph, ten sentences
+    article = Article(
+        article_id="12",
+        breadcrumb="Article (12)",
+        language="en",
+        page_start=4,
+        page_end=4,
+        body=paragraph,
+    )
+
+    chunks = chunk_articles(
+        [article],
+        source_slug="labour-law-en",
+        max_tokens=15,
+    )
+
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert chunk.mode == "subchunk"
+        assert chunk.breadcrumb == "Article (12)"
+    # Sentence-level sub-chunks carry an s{x}-s{y} suffix on top of the p1-p1 range.
+    assert any("s" in c.chunk_id.rsplit("#", 1)[-1] for c in chunks)
+    # All sub-chunks share the same parent article id prefix.
+    for chunk in chunks:
+        assert chunk.chunk_id.startswith("labour-law-en::art-12#p1-p1s")
+
+
+def test_single_sentence_exceeds_cap_emits_oversize_with_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A single sentence longer than max_tokens emits one oversized sub-chunk + a WARNING."""
+    giant_sentence = "word " * 200 + "end."  # 201 tokens, no `. ` separators inside
+    article = Article(
+        article_id="99",
+        breadcrumb="Article (99)",
+        language="en",
+        page_start=5,
+        page_end=5,
+        body=giant_sentence,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="uae_rag.ingestion.chunker"):
+        chunks = chunk_articles([article], source_slug="labour-law-en", max_tokens=50)
+
+    assert len(chunks) >= 1
+    assert any("oversize" in record.message.lower() for record in caplog.records), (
+        f"expected WARNING about oversize sentence; got: {[r.message for r in caplog.records]}"
+    )
