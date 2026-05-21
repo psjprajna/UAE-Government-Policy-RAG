@@ -2,7 +2,7 @@
 
 A retrieval-augmented question-answering service over public UAE government policy documents — UAE Labour Law (Federal Law No. 33 of 2021), MOHRE regulations, and UAE Visa regulations. Accepts questions in Arabic or English and returns grounded answers with article-level citations.
 
-> **Current capability (through Phase 1):** walking skeleton + reproducible corpus. `POST /query` still returns a deterministic stubbed answer (the real pipeline lands in Phase 7). A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
+> **Current capability (through Phase 2):** walking skeleton + reproducible corpus + heading-aware parsing/chunking. `POST /query` still returns a deterministic stubbed answer (the real pipeline lands in Phase 7). A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. A hybrid PDF parser (pdfplumber for English, pypdfium2 for Arabic) extracts text, detects `Article (N)` / `المادة (N)` headings, and the chunker emits embedding-ready chunks with a deterministic id and breadcrumb-prefixed text. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
 
 ## Why this exists
 
@@ -80,6 +80,37 @@ If a portal upgrades its bot detection or the chromium install is unavailable on
 3. Run `uv run python scripts/fetch_corpus.py --source <slug> --skip-download` to register its SHA.
 
 The same procedure applies to any source that becomes harder to fetch automatically in the future.
+
+## PDF parsing
+
+The parser (`src/uae_rag/ingestion/parser.py`) reads each PDF, detects article headings, and returns a list of `Article` records. The chunker (`src/uae_rag/ingestion/chunker.py`) wraps each article into one or more `Chunk` records with breadcrumb-prefixed text ready for embedding.
+
+- **Extractor**: pdfplumber for English sources, pypdfium2 for Arabic (pdfplumber returns Arabic in visual/reversed order; pypdfium2 preserves logical order). Selection is by `DocumentSource.language`.
+- **EN article regex** handles both `Article (N)` and the typesetter-flipped `Article )N(` form that appears for articles 2-17 in the published Labour Law PDF.
+- **AR article regex** matches the actual byte sequence pypdfium2 emits for the Arabic word for *article* (ALIF MEEM LAM ALIF DAL TEH-MARBUTA — LAM/MEEM swapped from canonical due to alif-lam ligature handling). The breadcrumb stored on each chunk uses the canonical ordering so citations render correctly.
+- **No chapter detection in v1**: the corpus PDFs don't expose chapter dividers in extracted text or PDF outlines, so the breadcrumb is `Article (N)` (or `المادة (N)`) only. ADR-0003's hierarchical goal is preserved for a later phase.
+- **Fallback**: when no article markers are found (currently: ICP Services Guide), the parser emits ~600-word section blocks with `breadcrumb = "{title} > Section {N}"` and `article_id = None`. Chunks carry `mode="fallback"` so downstream retrieval can weight them differently if needed.
+- **Sub-chunking**: articles whose body exceeds 600 words split on paragraph boundaries (`\n\n`); each sub-chunk inherits the parent breadcrumb and appends `#p{a}-p{b}` to its chunk id.
+
+### Preview the chunk output
+
+```bash
+uv run python scripts/preview_chunks.py                       # all 4 corpus PDFs
+uv run python scripts/preview_chunks.py --source SLUG         # one source (repeatable)
+```
+
+Sample output:
+
+```
+slug               articles  chunks  mode
+-----------------  --------  ------  --------
+labour-law-en      74        74      article
+labour-law-ar      74        74      article
+mohre-resolutions  39        39      article
+visa-regulations   65        65      fallback
+```
+
+`mode` is the dominant chunk mode (`article`, `subchunk`, or `fallback`). Exit codes: `0` if every source produced ≥1 chunk; `1` if any source failed or produced none; `2` on unknown `--source` slug.
 
 ## Tests
 
