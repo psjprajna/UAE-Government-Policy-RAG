@@ -2,7 +2,7 @@
 
 A retrieval-augmented question-answering service over public UAE government policy documents — UAE Labour Law (Federal Law No. 33 of 2021), MOHRE regulations, and UAE Visa regulations. Accepts questions in Arabic or English and returns grounded answers with article-level citations.
 
-> **Current capability (through Phase 2):** walking skeleton + reproducible corpus + heading-aware parsing/chunking. `POST /query` still returns a deterministic stubbed answer (the real pipeline lands in Phase 7). A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. A hybrid PDF parser (pdfplumber for English, pypdfium2 for Arabic) extracts text, detects `Article (N)` / `المادة (N)` headings, and the chunker emits embedding-ready chunks with a deterministic id and breadcrumb-prefixed text. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
+> **Current capability (through Phase 3 slice 1):** walking skeleton + reproducible corpus + heading-aware parsing/chunking + `EmbeddingsPort` / `VectorIndexPort` protocol surfaces. `POST /query` still returns a deterministic stubbed answer (the real pipeline lands in Phase 7). A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. A hybrid PDF parser (pdfplumber for English, pypdfium2 for Arabic) extracts text, detects `Article (N)` / `المادة (N)` headings, and the chunker emits embedding-ready chunks with a deterministic id, breadcrumb-prefixed text, an injectable token counter, and sentence-level secondary split for paragraphs that overflow the cap. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
 
 ## Why this exists
 
@@ -90,7 +90,8 @@ The parser (`src/uae_rag/ingestion/parser.py`) reads each PDF, detects article h
 - **AR article regex** matches the actual byte sequence pypdfium2 emits for the Arabic word for *article* (ALIF MEEM LAM ALIF DAL TEH-MARBUTA — LAM/MEEM swapped from canonical due to alif-lam ligature handling). The breadcrumb stored on each chunk uses the canonical ordering so citations render correctly.
 - **No chapter detection in v1**: the corpus PDFs don't expose chapter dividers in extracted text or PDF outlines, so the breadcrumb is `Article (N)` (or `المادة (N)`) only. ADR-0003's hierarchical goal is preserved for a later phase.
 - **Fallback**: when no article markers are found (currently: ICP Services Guide), the parser emits ~600-word section blocks with `breadcrumb = "{title} > Section {N}"` and `article_id = None`. Chunks carry `mode="fallback"` so downstream retrieval can weight them differently if needed.
-- **Sub-chunking**: articles whose body exceeds 600 words split on paragraph boundaries (`\n\n`); each sub-chunk inherits the parent breadcrumb and appends `#p{a}-p{b}` to its chunk id.
+- **Sub-chunking**: articles whose body exceeds the cap split first on paragraph boundaries (`\n\n`); each sub-chunk inherits the parent breadcrumb and appends `#p{a}-p{b}` to its chunk id. A paragraph that itself exceeds the cap is split on sentence boundaries (English `. ! ?` and Arabic `؟`) and the chunk id grows an `s{x}-s{y}` segment. A single sentence that still exceeds the cap is emitted as one oversize sub-chunk and logged at WARNING level.
+- **Token counter**: `chunk_articles` accepts a `count_tokens: Callable[[str], int]` parameter (default: word count via `str.split`). Phase 3's build script will pass the real e5-large tokenizer here so cap decisions track the embedder's actual budget.
 
 ### Preview the chunk output
 
@@ -104,9 +105,9 @@ Sample output:
 ```
 slug               articles  chunks  mode
 -----------------  --------  ------  --------
-labour-law-en      74        74      article
+labour-law-en      74        75      article
 labour-law-ar      74        74      article
-mohre-resolutions  39        39      article
+mohre-resolutions  39        41      article
 visa-regulations   65        65      fallback
 ```
 
