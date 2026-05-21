@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
-RetrievalSource = Literal["bm25", "dense", "hybrid"]
+RetrievalSource = Literal["bm25", "dense", "hybrid", "reranked"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,8 +20,8 @@ class RetrievalHit:
 
     Result lists are sorted by descending ``score``. ``score`` units depend on
     ``source``: cosine similarity for ``dense``, raw BM25 score for ``bm25``,
-    Reciprocal Rank Fusion score for ``hybrid``. Do not compare scores across
-    sources — compare ranks instead.
+    Reciprocal Rank Fusion score for ``hybrid``, cross-encoder logit for
+    ``reranked``. Do not compare scores across sources — compare ranks instead.
     """
 
     chunk_id: str
