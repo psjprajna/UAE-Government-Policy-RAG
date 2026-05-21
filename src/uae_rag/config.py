@@ -9,9 +9,11 @@ the fitness test (``tests/fitness/test_layer_boundaries.py``) enforces it.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
-from uae_rag.ports import EmbeddingsPort, VectorIndexPort
+from uae_rag.ingestion.chunker import Chunk
+from uae_rag.ports import EmbeddingsPort, RetrievalPort, VectorIndexPort
 
 _DEFAULT_PROFILE = "local"
 _DEFAULT_COLLECTION = "uae_policy_chunks"
@@ -59,4 +61,31 @@ def get_vector_index(
     raise ValueError(f"Unknown ADAPTER_PROFILE: {profile!r}")
 
 
-__all__ = ["get_embeddings", "get_vector_index"]
+def get_retriever(
+    *,
+    chunks: Sequence[Chunk],
+    embedder: EmbeddingsPort,
+    vector_index: VectorIndexPort,
+    per_leg_top_k: int = 50,
+    rrf_k: int = 60,
+) -> RetrievalPort:
+    """Wire the hybrid retriever — profile-agnostic; both legs route through ports.
+
+    Per ADR-0004, the local fusion runs BM25 (in-memory over ``chunks``) and a
+    dense leg backed by ``vector_index``, then merges via RRF. Phase 9's Azure
+    wiring will replace this with an Azure AI Search hybrid query that
+    satisfies the same ``RetrievalPort``.
+    """
+    from uae_rag.retrieval.bm25 import BM25Retriever
+    from uae_rag.retrieval.dense import DenseRetriever
+    from uae_rag.retrieval.hybrid import HybridRetriever
+
+    return HybridRetriever(
+        bm25=BM25Retriever(chunks),
+        dense=DenseRetriever(embedder=embedder, vector_index=vector_index),
+        per_leg_top_k=per_leg_top_k,
+        rrf_k=rrf_k,
+    )
+
+
+__all__ = ["get_embeddings", "get_retriever", "get_vector_index"]
