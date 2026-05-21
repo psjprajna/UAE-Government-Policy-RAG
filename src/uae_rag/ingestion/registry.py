@@ -52,30 +52,30 @@ class DocumentRecord(BaseModel):
 SOURCES: tuple[DocumentSource, ...] = (
     DocumentSource(
         slug="labour-law-en",
-        title="UAE Labour Law (Federal Law No. 33 of 2021) — English",
+        title="UAE Labour Law (Federal Decree-Law No. 33 of 2021, with amendments) — English",
         language="en",
-        url="https://uaelegislation.gov.ae/api/v1/legislations/1290/downloadPublication/en",
+        url="https://mohre.gov.ae/assets/download/8cd7cf08/Federal%20Decree-Law%20No.%2033%20of%202021%20Regarding%20the%20Regulation%20of%20Employment%20Relationship%20and%20its%20amendments.pdf.aspx",
         local_filename="labour-law-en.pdf",
     ),
     DocumentSource(
         slug="labour-law-ar",
-        title="قانون العمل الاتحادي رقم 33 لسنة 2021",
+        title="قانون العمل الاتحادي رقم 33 لسنة 2021 — Arabic",
         language="ar",
-        url="https://uaelegislation.gov.ae/api/v1/legislations/1290/downloadPublication/ar",
+        url="https://www.mohre.gov.ae/assets/download/3ee9dbb1/labour-law-ar.aspx",
         local_filename="labour-law-ar.pdf",
     ),
     DocumentSource(
         slug="mohre-resolutions",
-        title="MOHRE Cabinet Resolutions implementing the Labour Law",
+        title="MOHRE Cabinet Resolution No. 1 of 2022 — Executive Regulations of Decree-Law No. 33",
         language="en",
-        url="https://www.mohre.gov.ae/handlers/getfile.ashx?fileurl=/-/media/files/mohre/resolutions/labour-law-resolutions.pdf",
+        url="https://www.mohre.gov.ae/assets/download/46bdbfda/Cabinet%20Resolution%20_Executive%20Regulations%20Decree-Law%20No.%2033.pdf.aspx",
         local_filename="mohre-resolutions.pdf",
     ),
     DocumentSource(
         slug="visa-regulations",
-        title="UAE Federal Visa and Entry Regulations",
+        title="ICP Services Guide v4.2 (2024) — UAE entry and residence regulations",
         language="en",
-        url="https://icp.gov.ae/wp-content/uploads/2023/visa-regulations.pdf",
+        url="https://icp.gov.ae/wp-content/uploads/2024/05/%D8%AF%D9%84%D9%8A%D9%84-%D8%A7%D9%84%D8%AE%D8%AF%D9%85%D8%A7%D8%AA-%D8%A5%D8%B5%D8%AF%D8%A7%D8%B1-4.2-2024EN.pdf",
         local_filename="visa-regulations.pdf",
     ),
 )

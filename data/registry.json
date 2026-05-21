@@ -1,0 +1,29 @@
+{
+  "labour-law-en": {
+    "bytes": 1298988,
+    "fetched_at": "2026-05-21T08:27:23+00:00",
+    "language": "en",
+    "sha256": "e31ffb0ee7e09312be26211126ddd79e039468a881f0f883c515b66eef6d8142",
+    "slug": "labour-law-en",
+    "title": "UAE Labour Law (Federal Decree-Law No. 33 of 2021, with amendments) — English",
+    "url": "https://mohre.gov.ae/assets/download/8cd7cf08/Federal%20Decree-Law%20No.%2033%20of%202021%20Regarding%20the%20Regulation%20of%20Employment%20Relationship%20and%20its%20amendments.pdf.aspx"
+  },
+  "mohre-resolutions": {
+    "bytes": 667854,
+    "fetched_at": "2026-05-21T08:27:23+00:00",
+    "language": "en",
+    "sha256": "c7c0aefb32cafc5ffbf972a3ee24492eb936f8ad264cce1a48bf5228eee50c4a",
+    "slug": "mohre-resolutions",
+    "title": "MOHRE Cabinet Resolution No. 1 of 2022 — Executive Regulations of Decree-Law No. 33",
+    "url": "https://www.mohre.gov.ae/assets/download/46bdbfda/Cabinet%20Resolution%20_Executive%20Regulations%20Decree-Law%20No.%2033.pdf.aspx"
+  },
+  "visa-regulations": {
+    "bytes": 3871064,
+    "fetched_at": "2026-05-21T08:28:10+00:00",
+    "language": "en",
+    "sha256": "8a062019289db649f4c919f540b0c2fd37d903b6d7ceff7f3229858f7da874b5",
+    "slug": "visa-regulations",
+    "title": "ICP Services Guide v4.2 (2024) — UAE entry and residence regulations",
+    "url": "https://icp.gov.ae/wp-content/uploads/2024/05/%D8%AF%D9%84%D9%8A%D9%84-%D8%A7%D9%84%D8%AE%D8%AF%D9%85%D8%A7%D8%AA-%D8%A5%D8%B5%D8%AF%D8%A7%D8%B1-4.2-2024EN.pdf"
+  }
+}
