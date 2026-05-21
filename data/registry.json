@@ -1,0 +1,38 @@
+{
+  "labour-law-ar": {
+    "bytes": 508474,
+    "fetched_at": "2026-05-21T08:53:38+00:00",
+    "language": "ar",
+    "sha256": "4c5a721869c4782345db719d2772fd8eb017585f8bba194edb1e67e59a6f6294",
+    "slug": "labour-law-ar",
+    "title": "قانون العمل الاتحادي رقم 33 لسنة 2021 — Arabic",
+    "url": "https://uaelegislation.gov.ae/ar/legislations/1541/download"
+  },
+  "labour-law-en": {
+    "bytes": 320154,
+    "fetched_at": "2026-05-21T08:53:36+00:00",
+    "language": "en",
+    "sha256": "f58777b34ca69bc71003518a104f7b014b2e4073207bd25a6cf5e80f183e081c",
+    "slug": "labour-law-en",
+    "title": "UAE Labour Law (Federal Decree-Law No. 33 of 2021) — English",
+    "url": "https://uaelegislation.gov.ae/en/legislations/1541/download"
+  },
+  "mohre-resolutions": {
+    "bytes": 667854,
+    "fetched_at": "2026-05-21T08:53:39+00:00",
+    "language": "en",
+    "sha256": "c7c0aefb32cafc5ffbf972a3ee24492eb936f8ad264cce1a48bf5228eee50c4a",
+    "slug": "mohre-resolutions",
+    "title": "MOHRE Cabinet Resolution No. 1 of 2022 — Executive Regulations of Decree-Law No. 33",
+    "url": "https://www.mohre.gov.ae/assets/download/46bdbfda/Cabinet%20Resolution%20_Executive%20Regulations%20Decree-Law%20No.%2033.pdf.aspx"
+  },
+  "visa-regulations": {
+    "bytes": 3871064,
+    "fetched_at": "2026-05-21T08:53:40+00:00",
+    "language": "en",
+    "sha256": "8a062019289db649f4c919f540b0c2fd37d903b6d7ceff7f3229858f7da874b5",
+    "slug": "visa-regulations",
+    "title": "ICP Services Guide v4.2 (2024) — UAE entry and residence regulations",
+    "url": "https://icp.gov.ae/wp-content/uploads/2024/05/%D8%AF%D9%84%D9%8A%D9%84-%D8%A7%D9%84%D8%AE%D8%AF%D9%85%D8%A7%D8%AA-%D8%A5%D8%B5%D8%AF%D8%A7%D8%B1-4.2-2024EN.pdf"
+  }
+}
