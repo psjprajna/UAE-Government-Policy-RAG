@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from uae_rag.ingestion.chunker import Chunk
-from uae_rag.ports import EmbeddingsPort, RetrievalPort, VectorIndexPort
+from uae_rag.ports import EmbeddingsPort, RerankerPort, RetrievalPort, VectorIndexPort
 
 _DEFAULT_PROFILE = "local"
 _DEFAULT_COLLECTION = "uae_policy_chunks"
@@ -88,4 +88,21 @@ def get_retriever(
     )
 
 
-__all__ = ["get_embeddings", "get_retriever", "get_vector_index"]
+def get_reranker() -> RerankerPort:
+    """Return the reranker adapter selected by ``ADAPTER_PROFILE``.
+
+    Per ADR-0007, the local profile uses ``BAAI/bge-reranker-v2-m3`` via a
+    sentence-transformers ``CrossEncoder``. The Phase 9 Azure/Cohere adapter
+    will satisfy the same ``RerankerPort``.
+    """
+    profile = _profile()
+    if profile == "local":
+        from uae_rag.adapters.local.reranker import SentenceTransformersReranker
+
+        return SentenceTransformersReranker()
+    if profile == "azure":
+        raise NotImplementedError("Azure/Cohere reranker adapter ships in Phase 9")
+    raise ValueError(f"Unknown ADAPTER_PROFILE: {profile!r}")
+
+
+__all__ = ["get_embeddings", "get_reranker", "get_retriever", "get_vector_index"]
