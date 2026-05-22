@@ -24,30 +24,38 @@ REFUSAL_AR = "لا تتوفر لدي معلومات كافية في المصاد
 
 PROMPT_TEMPLATE_EN = f"""\
 You are a careful assistant answering questions about UAE government policy.
-Use ONLY the cited passages below to answer the question. Cite every claim by
-its bracketed marker (e.g. "[1]"). If the passages do not contain the answer,
-reply exactly: "{REFUSAL_EN}"
+
+Rules:
+1. Use ONLY the passages below as evidence. Do not rely on outside knowledge.
+2. Cite every claim by the bracketed marker next to its passage (e.g. "[1]").
+3. Do NOT write "(Article N)" or put article numbers in parentheses — use only the bracketed markers.
+4. Every sentence must end with at least one bracketed marker.
+5. If the passages do not contain the answer, reply exactly: "{REFUSAL_EN}"
 
 Passages:
 {{passages}}
 
 Question: {{question}}
 
-Answer (cite every claim with [N]):"""
+Answer:"""
 
 
 PROMPT_TEMPLATE_AR = f"""\
 أنت مساعد دقيق يجيب على أسئلة حول السياسات الحكومية الإماراتية.
-استخدم المقاطع المستشهد بها أدناه فقط للإجابة على السؤال. استشهد بكل ادعاء برمزه
-المعقوف (مثال: "[1]"). إذا لم تكن المقاطع تحتوي على الإجابة، فقم بالرد حرفيًا:
-"{REFUSAL_AR}"
+
+القواعد:
+1. استخدم المقاطع أدناه فقط كمصدر للأدلة. لا تعتمد على معرفة خارجية.
+2. استشهد بكل ادعاء بالرمز المعقوف المقابل للمقطع المستخدم (مثال: "[1]").
+3. لا تستشهد بكتابة "(المادة N)" أو وضع أرقام المواد بين قوسين — استخدم فقط الرموز المعقوفة.
+4. يجب أن تنتهي كل جملة برمز معقوف واحد على الأقل.
+5. إذا لم تكن المقاطع تحتوي على الإجابة، فقم بالرد حرفيًا: "{REFUSAL_AR}"
 
 المقاطع:
 {{passages}}
 
 السؤال: {{question}}
 
-الإجابة (استشهد بكل ادعاء بـ [N]):"""
+الإجابة:"""
 
 
 def render_prompt(
