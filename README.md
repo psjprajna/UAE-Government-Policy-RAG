@@ -2,7 +2,7 @@
 
 A retrieval-augmented question-answering service over public UAE government policy documents — UAE Labour Law (Federal Law No. 33 of 2021), MOHRE regulations, and UAE Visa regulations. Accepts questions in Arabic or English and returns grounded answers with article-level citations.
 
-> **Current capability (through Phase 6):** walking skeleton + reproducible corpus + heading-aware parsing/chunking + a persistent ChromaDB vector index of the full corpus + a live hybrid retriever (BM25 + dense, fused with Reciprocal Rank Fusion at k=60) + a cross-encoder reranker (`BAAI/bge-reranker-v2-m3`) that re-scores the hybrid top-20 + a multi-query rewriter that expands one question into N LLM-generated phrasings and fuses their per-variation hit lists via the same RRF algebra + a `Generator` that detects the question's language (English / Arabic, via `lingua-language-detector`), renders the language-appropriate prompt over the reranked top-K, calls a local Ollama `llama3.1:8b` (ADR-0008) behind a swap-ready `LLMPort`, and returns a grounded answer with bracketed citations (`[1]`, `[2]`, …) deduped on `(source, article)`. Empty `hits` short-circuits to a deterministic refusal phrase in the detected language without calling the LLM. `POST /query` still returns a deterministic stubbed answer (the end-to-end wiring lands in Phase 7), but every component the wiring will compose — `config.get_llm()`, `MultiQueryRetriever`, `RerankRetriever`, `Generator` — is shipped, exercised end-to-end against the real corpus + daemon in `tests/integration/test_generation_pipeline.py` (auto-skipped without the corpus or a reachable Ollama daemon), and ready to plug together. A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. A hybrid PDF parser (pdfplumber for English, pypdfium2 for Arabic) extracts text, detects `Article (N)` / `المادة (N)` headings, and the chunker emits embedding-ready chunks with a deterministic id, breadcrumb-prefixed text, an injectable token counter, and sentence-level secondary split for paragraphs that overflow the cap. `scripts/build_index.py` embeds the full corpus (285 chunks) with `intfloat/multilingual-e5-large` and persists vectors to `data/chroma_db/`; the embedding model can be swapped via `LOCAL_EMBEDDINGS_*` env vars and the index refuses an incompatible swap unless re-run with `--reset`. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
+> **Current capability (through Phase 7):** `POST /query` is now wired end-to-end. FastAPI's `lifespan` composes `MultiQueryRetriever → HybridRetriever → RerankRetriever → Generator` once at server boot (sub-second to a few seconds — adapter construction is side-effect-light, `@cached_property` defers every weight load); the first request pays the cold model-load tax (e5-large + BGE-v2-m3 + Ollama warmup), warm requests run retrieval + rerank in under a second and ~30–120 s of LLM generation depending on answer length and hardware. The wire `Citation` carries the in-answer `[N]` marker deduped on `(source, article)`; transport failures from the local LLM surface as `503 {"detail": "LLM unavailable"}`, whitespace-only questions surface as `400` with the upstream exception's own message verbatim, and validation failures surface as `422` from Pydantic. Walking-skeleton building blocks remain: reproducible corpus (one-command fetcher with a committed SHA-256 registry at `data/registry.json`, Playwright + chromium for JS-challenged portals, stdlib `urllib` for direct-PDF sources), heading-aware PDF parsing (pdfplumber for English, pypdfium2 for Arabic; detects `Article (N)` / `المادة (N)` headings) and chunking (deterministic id, breadcrumb-prefixed text, injectable token counter, sentence-level split for overflows), a persistent ChromaDB index of the full 285-chunk corpus embedded with `intfloat/multilingual-e5-large` (swap models via `LOCAL_EMBEDDINGS_*` env vars; the index refuses an incompatible swap unless re-run with `--reset`), a live hybrid retriever (BM25 + dense, fused with Reciprocal Rank Fusion at k=60), a `BAAI/bge-reranker-v2-m3` cross-encoder that re-scores the hybrid top-20, a multi-query rewriter that expands one question into N LLM-generated phrasings and fuses their per-variation hit lists via the same RRF algebra, and a `Generator` that detects the question's language (English / Arabic, via `lingua-language-detector`), renders the language-appropriate prompt, calls a local Ollama `llama3.1:8b` (ADR-0008) behind a swap-ready `LLMPort`, and returns a grounded answer with bracketed citations. Empty `hits` short-circuits to a deterministic refusal phrase in the detected language without calling the LLM. Re-runs of the fetcher are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
 
 ## Why this exists
 
@@ -35,15 +35,15 @@ You should receive a JSON response of shape:
 
 ```json
 {
-  "answer": "...",
+  "answer": "... [1] ...",
   "citations": [
-    {"source": "UAE Labour Law", "article": "..."}
+    {"marker": "[1]", "source": "labour-law-en", "article": "29"}
   ],
   "language": "en"
 }
 ```
 
-Swagger UI is auto-served at `http://localhost:8000/docs`.
+Swagger UI is auto-served at `http://localhost:8000/docs`. See [Running `/query` end-to-end](#running-query-end-to-end) below for the lifespan startup behaviour, measured cold/warm latencies, and verbatim sample responses.
 
 ## Corpus fetch
 
@@ -289,6 +289,66 @@ AR: "ما هي مدة الإجازة السنوية؟"
 ```
 
 The `citations` list always reports every passage passed to the prompt — `available, not cited` rows are the chunks the reranker surfaced that the model chose not to reference. The AR answer is intentionally a direct quote of one sub-clause: at `temperature=0.0` the model favors quoting verbatim over paraphrasing. Pipeline behavior is verified by `test_generation_pipeline.py`: each canonical query must return ≤ 600 chars, contain at least one `[N]` marker, and have `citations[0].article` matching the expected article id.
+
+## Running `/query` end-to-end
+
+`POST /query` runs the full `MultiQueryRetriever → HybridRetriever → RerankRetriever → Generator` stack against the local corpus. FastAPI's `lifespan` composes the pipeline once at server boot and stores it on `app.state.pipeline`; every adapter defers its model load to `@cached_property`, so boot stays cheap (~10–20 s, dominated by PDF parse + BM25 tokenization) and the first request pays the model-load tax. Run `uv run python scripts/build_index.py` once before serving, otherwise the dense leg returns no hits and the system degrades to refusal-mode on every query.
+
+| Stage | Latency (M-series CPU, warm caches) |
+|---|---|
+| `uvicorn` boot (lifespan + BM25 + Chroma open) | ~17 s |
+| First `/query` (cold: e5-large + BGE + Ollama warmup) | ~190 s |
+| Subsequent warm `/query` | ~110–120 s (dominated by `llama3.1:8b` generation) |
+
+`MultiQueryRetriever` issues three LLM-generated query rephrasings per request (4 LLM round-trips per `/query` total: 3 variations + 1 answer generation), which is the bulk of warm-request latency. Phase 8 may parallelize the variation calls — flagged as `# TODO(perf)` in `retrieval/multi_query.py`.
+
+### EN sample (verbatim from `uvicorn` on `127.0.0.1:8001`)
+
+```bash
+curl -X POST http://localhost:8001/query \
+  -H 'content-type: application/json' \
+  -d '{"question":"What is the annual leave entitlement?"}'
+```
+
+```json
+{
+  "answer": "According to Article (29) [1], the Worker shall be entitled to an annual leave with full pay of not less than:\na. Thirty days for each year of his extended service.\nb. Two days for each month if his service period is more than six months and less than one year.\nc. A leave for parts of the last year he spent at work, in the event that his service ends before using his annual leave balance.\n\nAdditionally, according to Article (2) of [1], the part-time Worker is entitled to an annual leave according to the actual working hours spent by the Worker with the Employer, and the duration of which is specified in the employment contract, in accordance with what is determined by the Executive Regulation of this Decree by law.\n\nAnd also, according to Article (2) of [2], a part-time worker shall be entitled to an annual leave according to the actual working hours he spends with the employer. The duration of the annual leave shall be determined on the basis of the total working hours after converting them into working days, divided by the number of working days in the year, multiplied by the legally prescribed leaves.\n\nSo, the annual leave entitlement is at least 30 days for full-time workers and a minimum of five working days per year for part-time workers.",
+  "citations": [
+    {"marker": "[1]", "source": "labour-law-en", "article": "29"},
+    {"marker": "[2]", "source": "mohre-resolutions", "article": "18"},
+    {"marker": "[3]", "source": "mohre-resolutions", "article": "19"},
+    {"marker": "[4]", "source": "mohre-resolutions", "article": "10"}
+  ],
+  "language": "en"
+}
+```
+
+### AR sample (verbatim)
+
+```bash
+curl -X POST http://localhost:8001/query \
+  -H 'content-type: application/json' \
+  -d '{"question":"ما هي مدة الإجازة السنوية؟"}'
+```
+
+```json
+{
+  "answer": "ب. يومان عن كل شهر إذا كانت مدة خدمته تزيد على ستة أشهر وتقل عن سنة. [1]",
+  "citations": [
+    {"marker": "[1]", "source": "labour-law-ar", "article": "29"},
+    {"marker": "[2]", "source": "labour-law-ar", "article": "32"},
+    {"marker": "[3]", "source": "labour-law-ar", "article": "30"}
+  ],
+  "language": "ar"
+}
+```
+
+### Failure modes
+
+- **LLM unreachable (post-boot).** When Ollama is down or `LOCAL_LLM_HOST` points to a closed port, the next `/query` surfaces as `503 {"detail": "LLM unavailable"}`. The underlying exception is logged via `logger.exception` but its message — which would carry the configured `host:port` — is not leaked on the wire. Lifespan itself never contacts the daemon (`OllamaLLM.__init__` only reads env vars), so the server boots cleanly even with Ollama stopped; the 503 fires at request time on the Generator's first LLM call.
+- **Whitespace-only question.** `Generator.generate` raises `ValueError("question must be non-empty")`; the handler maps it to `400 {"detail": "question must be non-empty"}` — the upstream message is propagated verbatim, not rewritten.
+- **Pydantic validation.** Empty or oversized (>2000 chars) `question` returns `422` before the handler runs.
+- **Empty corpus / retrieval miss.** `Generator.generate` short-circuits to the language-specific refusal phrase with an empty citations list — `200 OK`, never a 500.
 
 ## Tests
 
