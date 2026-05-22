@@ -112,6 +112,22 @@ def get_llm() -> LLMPort:
     raise ValueError(f"Unknown ADAPTER_PROFILE: {profile!r}")
 
 
+def get_judge_llm() -> LLMPort:
+    """Return the LLM used by the RAGAS judge, selected by ``RAGAS_JUDGE_PROFILE``.
+
+    Default ``local`` reuses the same :class:`OllamaLLM` as :func:`get_llm` —
+    self-bias caveat documented in ADR-0009. The ``openai`` profile is reserved
+    for the Phase 9 Azure adapter and raises :class:`NotImplementedError` until
+    then so callers fail fast at startup rather than mid-evaluation.
+    """
+    profile = os.environ.get("RAGAS_JUDGE_PROFILE", _DEFAULT_PROFILE)
+    if profile == "local":
+        return get_llm()
+    if profile == "openai":
+        raise NotImplementedError("OpenAI judge ships with Phase 9 Azure adapter")
+    raise ValueError(f"Unknown RAGAS_JUDGE_PROFILE: {profile!r}")
+
+
 def get_reranker() -> RerankerPort:
     """Return the reranker adapter selected by ``ADAPTER_PROFILE``.
 
@@ -129,4 +145,11 @@ def get_reranker() -> RerankerPort:
     raise ValueError(f"Unknown ADAPTER_PROFILE: {profile!r}")
 
 
-__all__ = ["get_embeddings", "get_llm", "get_reranker", "get_retriever", "get_vector_index"]
+__all__ = [
+    "get_embeddings",
+    "get_judge_llm",
+    "get_llm",
+    "get_reranker",
+    "get_retriever",
+    "get_vector_index",
+]
