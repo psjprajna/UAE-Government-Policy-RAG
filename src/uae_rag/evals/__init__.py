@@ -1,7 +1,20 @@
-"""Evaluation domain layer for Phase 8 — RAGAS harness.
+"""Evaluation domain layer for Phase 8 — RAGAS harness."""
 
-Slice A populates :mod:`uae_rag.evals.golden`. Subsequent slices add
-:mod:`uae_rag.evals.pipeline`, :mod:`uae_rag.evals.wrappers`, and
-:mod:`uae_rag.evals.ragas_runner`. The named-exports re-export hub
-lands with Slice B1 once those modules exist.
-"""
+from __future__ import annotations
+
+from uae_rag.evals.golden import (
+    ExpectedArticle,
+    GoldenItem,
+    GoldenSetError,
+    load_golden,
+)
+from uae_rag.evals.pipeline import ComposedPipeline, compose_pipeline
+
+__all__ = [
+    "ComposedPipeline",
+    "ExpectedArticle",
+    "GoldenItem",
+    "GoldenSetError",
+    "compose_pipeline",
+    "load_golden",
+]
