@@ -2,7 +2,7 @@
 
 A retrieval-augmented question-answering service over public UAE government policy documents — UAE Labour Law (Federal Law No. 33 of 2021), MOHRE regulations, and UAE Visa regulations. Accepts questions in Arabic or English and returns grounded answers with article-level citations.
 
-> **Current capability (through Phase 5):** walking skeleton + reproducible corpus + heading-aware parsing/chunking + a persistent ChromaDB vector index of the full corpus + a live hybrid retriever (BM25 + dense, fused with Reciprocal Rank Fusion at k=60) + a cross-encoder reranker (`BAAI/bge-reranker-v2-m3`) that re-scores the hybrid top-20 before they reach the generator. `POST /query` still returns a deterministic stubbed answer (the real pipeline lands in Phase 7), but `config.get_retriever(...)` and `config.get_reranker()` now wire up the production retrieval + rerank path and are exercised end-to-end against the real Chroma collection. A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. A hybrid PDF parser (pdfplumber for English, pypdfium2 for Arabic) extracts text, detects `Article (N)` / `المادة (N)` headings, and the chunker emits embedding-ready chunks with a deterministic id, breadcrumb-prefixed text, an injectable token counter, and sentence-level secondary split for paragraphs that overflow the cap. `scripts/build_index.py` embeds the full corpus (285 chunks) with `intfloat/multilingual-e5-large` and persists vectors to `data/chroma_db/`; the embedding model can be swapped via `LOCAL_EMBEDDINGS_*` env vars and the index refuses an incompatible swap unless re-run with `--reset`. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
+> **Current capability (through Phase 6):** walking skeleton + reproducible corpus + heading-aware parsing/chunking + a persistent ChromaDB vector index of the full corpus + a live hybrid retriever (BM25 + dense, fused with Reciprocal Rank Fusion at k=60) + a cross-encoder reranker (`BAAI/bge-reranker-v2-m3`) that re-scores the hybrid top-20 + a multi-query rewriter that expands one question into N LLM-generated phrasings and fuses their per-variation hit lists via the same RRF algebra + a `Generator` that detects the question's language (English / Arabic, via `lingua-language-detector`), renders the language-appropriate prompt over the reranked top-K, calls a local Ollama `llama3.1:8b` (ADR-0008) behind a swap-ready `LLMPort`, and returns a grounded answer with bracketed citations (`[1]`, `[2]`, …) deduped on `(source, article)`. Empty `hits` short-circuits to a deterministic refusal phrase in the detected language without calling the LLM. `POST /query` still returns a deterministic stubbed answer (the end-to-end wiring lands in Phase 7), but every component the wiring will compose — `config.get_llm()`, `MultiQueryRetriever`, `RerankRetriever`, `Generator` — is shipped, exercised end-to-end against the real corpus + daemon in `tests/integration/test_generation_pipeline.py` (auto-skipped without the corpus or a reachable Ollama daemon), and ready to plug together. A one-command fetcher downloads the four UAE government policy PDFs into `data/raw/` and verifies them against a committed SHA-256 registry at `data/registry.json`. Sources behind a JavaScript challenge (uaelegislation.gov.ae, MOHRE) are fetched through a headless Playwright + chromium adapter; direct-PDF sources (ICP) go through stdlib `urllib`. A hybrid PDF parser (pdfplumber for English, pypdfium2 for Arabic) extracts text, detects `Article (N)` / `المادة (N)` headings, and the chunker emits embedding-ready chunks with a deterministic id, breadcrumb-prefixed text, an injectable token counter, and sentence-level secondary split for paragraphs that overflow the cap. `scripts/build_index.py` embeds the full corpus (285 chunks) with `intfloat/multilingual-e5-large` and persists vectors to `data/chroma_db/`; the embedding model can be swapped via `LOCAL_EMBEDDINGS_*` env vars and the index refuses an incompatible swap unless re-run with `--reset`. Re-runs are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
 
 ## Why this exists
 
@@ -172,19 +172,18 @@ Labour Law Article 29 is the annual-leave article and Article 51 is end-of-servi
 
 ## Hybrid retrieval + reranking
 
-`config.get_retriever(chunks=..., embedder=..., vector_index=...)` returns a `RetrievalPort` that runs both a sparse (BM25Okapi) and a dense (e5-large + ChromaDB) leg over the top-50 candidates each, then fuses the rankings with Reciprocal Rank Fusion at `k=60` (ADR-0004). The fused list is returned ranked by descending RRF score, with `chunk_id` as a deterministic tie-break. `config.get_reranker()` returns a `RerankerPort` backed by `BAAI/bge-reranker-v2-m3` via a sentence-transformers `CrossEncoder` (ADR-0007); `uae_rag.retrieval.rerank.RerankRetriever` composes the two and itself satisfies `RetrievalPort`, so `/query` stays agnostic to whether reranking is on, and a Phase 9 swap to Cohere Rerank replaces the local CrossEncoder without domain changes. Reranker failures fall back to the unreranked hybrid hits — `/query` always returns something. Multi-query rewriting ships in Phase 6 with the LLM port.
+`config.get_retriever(chunks=..., embedder=..., vector_index=...)` returns a `RetrievalPort` that runs both a sparse (BM25Okapi) and a dense (e5-large + ChromaDB) leg over the top-50 candidates each, then fuses the rankings with Reciprocal Rank Fusion at `k=60` (ADR-0004). The fused list is returned ranked by descending RRF score, with `chunk_id` as a deterministic tie-break. `config.get_reranker()` returns a `RerankerPort` backed by `BAAI/bge-reranker-v2-m3` via a sentence-transformers `CrossEncoder` (ADR-0007); `uae_rag.retrieval.rerank.RerankRetriever` composes the two and itself satisfies `RetrievalPort`, so `/query` stays agnostic to whether reranking is on, and a Phase 9 swap to Cohere Rerank replaces the local CrossEncoder without domain changes. Reranker failures fall back to the unreranked hybrid hits — `/query` always returns something. `uae_rag.retrieval.multi_query.MultiQueryRetriever` sits in front and expands the user's query into N LLM-rephrased variations (ADR-0008), retrieves each independently from the inner retriever, and fuses the per-variation hit lists via the same RRF algebra — itself satisfying `RetrievalPort` so the composition stays uniform. If the LLM is down, the wrapper falls back to a single inner-retriever call so retrieval never hard-fails on a daemon outage.
 
 ```mermaid
 flowchart LR
-  Q[user query] --> MQ[multi-query rewrite<br/>Phase 6 — deferred]
+  Q[user query] --> MQ[multi-query rewrite<br/>Ollama llama3.1:8b, N variations]
   MQ --> BM[BM25 leg<br/>rank_bm25, top-50]
   MQ --> DE[dense leg<br/>e5-large + Chroma, top-50]
   BM --> RRF[RRF fusion<br/>k=60]
   DE --> RRF
   RRF --> RR[cross-encoder reranker<br/>BGE-v2-m3, top-10]
-  RR --> OUT[top-N to generator<br/>Phase 6+]
-  classDef deferred stroke-dasharray:4 4,color:#888;
-  class MQ deferred;
+  RR --> GEN[generator<br/>llama3.1:8b + EN/AR prompts]
+  GEN --> OUT[answer + citations + language<br/>AnswerPayload]
 ```
 
 ### Per-query top-3 (real numbers from the 285-chunk corpus)
@@ -230,6 +229,66 @@ AR: الإجازة السنوية                  █ 1       █ 1       █ 1
 The AR exact-reference query (`المادة 29`) is the case where BM25 wins decisively over dense — dense ranks `art-26` and `art-27` (semantically adjacent articles) above the literal match. Hybrid keeps BM25's lexical precision while picking up the dense leg's recall on phrasal queries.
 
 The reranker's contribution on this corpus isn't lifting the gold chunk — hybrid already places it at rank 1 or 2 for all four queries. What the cross-encoder *does* change is the rest of the top-3: it replaces adjacent-article noise (`art-27`, `art-33`, `art-37`) with more semantically targeted picks (`art-9`, `art-68`), reorders sub-chunks within the same article so the directly relevant slice surfaces first (AR `الإجازة السنوية` promotes `art-29#p1-p1s1-s11` over `art-29#p1-p1s12-s16`), and on the Arabic-leave query surfaces the English Article 29 chunk in the reranked top-3 — true cross-language semantic relevance, which BGE-v2-m3 is trained for. Phase 8 RAGAS will quantify the diff over the 50-question golden set.
+
+## Generation (LLM + citations)
+
+`config.get_llm()` returns an `LLMPort` (ADR-0008); the local profile wraps the [Ollama](https://ollama.com) daemon serving `llama3.1:8b` with a four-env-var swap surface (`LOCAL_LLM_*`, see table below). `uae_rag.generation.answer.Generator` orchestrates the answer step: it runs `lingua-language-detector` over the user's question (restricted to EN+AR), renders the language-appropriate prompt (`PROMPT_TEMPLATE_EN` / `PROMPT_TEMPLATE_AR`) over the reranked top-K passages, calls the LLM at `temperature=0.0` for deterministic decoding, and returns an `AnswerPayload(answer, citations, language, prompt_used)`. Citations are 1-based bracketed integers (`[1]`, `[2]`, …) deduped on `(source, article)` so two chunks from the same article collapse to one marker. Empty `hits` short-circuits to the language-specific refusal phrase (`"I don't have enough information in the cited sources to answer that."` / `"لا تتوفر لدي معلومات كافية في المصادر المستشهد بها للإجابة عن هذا السؤال."`) without calling the LLM. Transport failures surface as `LLMUnavailableError` so the eventual `/query` handler can return 503 cleanly. The `Generator` is composition-ready: Phase 7 wires `MultiQuery → Hybrid → Rerank → Generator` end-to-end.
+
+### Local Ollama setup
+
+```bash
+# 1. Install the daemon (https://ollama.com/download) and start it (it runs in the background).
+ollama serve              # one-time per session — or use the menu-bar / launchd integration.
+
+# 2. Pull the default model (~4.7 GB, one-time per machine).
+ollama pull llama3.1:8b
+```
+
+| Env var | Default | Notes |
+|---|---|---|
+| `LOCAL_LLM_MODEL` | `llama3.1:8b` | Any Ollama model tag (e.g. `qwen2.5:7b`). |
+| `LOCAL_LLM_HOST` | `http://localhost:11434` | Ollama HTTP endpoint. |
+| `LOCAL_LLM_TIMEOUT_S` | `120` | Per-request timeout (seconds); generous for cold start. |
+| `LOCAL_LLM_KEEP_ALIVE` | `5m` | How long Ollama keeps the model resident between requests. |
+
+A swap to a different local model (`LOCAL_LLM_MODEL=qwen2.5:7b`) requires no code edits — only `ollama pull <tag>` first. The Phase 9 Azure OpenAI `gpt-4o` adapter will satisfy the same `LLMPort` (ADR-0008).
+
+### Sample answers
+
+Live outputs captured against `llama3.1:8b` via Ollama, running the same pipeline the integration test exercises (`MultiQuery → Hybrid → Rerank → Generator`, reranked top-5 into the prompt). Reproduce with `uv run pytest -m "slow and adapter_local"` — answers are deterministic at `temperature=0.0`.
+
+```
+EN: "What is the annual leave entitlement?"
+  language : en
+  answer   :
+    According to [1], the Worker shall be entitled to an annual leave with
+    full pay of not less than:
+    a. Thirty days for each year of his extended service.
+    b. Two days for each month if his service period is more than six months
+       and less than one year.
+    c. A leave for parts of the last year he spent at work, in the event that
+       his service ends before using his annual leave balance.
+
+    Additionally, according to [2], a part-time worker shall be entitled to
+    an annual leave according to the actual working hours he spends with the
+    employer, with a minimum of five working days per year for annual leave.
+  citations:
+    [1] labour-law-en,     Article 29   (used in answer)
+    [2] mohre-resolutions, Article 18   (used in answer)
+    [3] mohre-resolutions, Article 19   (available, not cited)
+    [4] mohre-resolutions, Article 10   (available, not cited)
+
+AR: "ما هي مدة الإجازة السنوية؟"
+  language : ar
+  answer   : "ب. يومان عن كل شهر إذا كانت مدة خدمته تزيد على ستة أشهر وتقل عن سنة. [1]"
+  citations:
+    [1] labour-law-ar, المادة 29   (used in answer)
+    [2] labour-law-ar, المادة 32   (available, not cited)
+    [3] labour-law-ar, المادة 30   (available, not cited)
+    [4] labour-law-ar, المادة 31   (available, not cited)
+```
+
+The `citations` list always reports every passage passed to the prompt — `available, not cited` rows are the chunks the reranker surfaced that the model chose not to reference. The AR answer is intentionally a direct quote of one sub-clause: at `temperature=0.0` the model favors quoting verbatim over paraphrasing. Pipeline behavior is verified by `test_generation_pipeline.py`: each canonical query must return ≤ 600 chars, contain at least one `[N]` marker, and have `citations[0].article` matching the expected article id.
 
 ## Tests
 

@@ -13,7 +13,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from uae_rag.ingestion.chunker import Chunk
-from uae_rag.ports import EmbeddingsPort, RerankerPort, RetrievalPort, VectorIndexPort
+from uae_rag.ports import (
+    EmbeddingsPort,
+    LLMPort,
+    RerankerPort,
+    RetrievalPort,
+    VectorIndexPort,
+)
 
 _DEFAULT_PROFILE = "local"
 _DEFAULT_COLLECTION = "uae_policy_chunks"
@@ -88,6 +94,24 @@ def get_retriever(
     )
 
 
+def get_llm() -> LLMPort:
+    """Return the LLM adapter selected by ``ADAPTER_PROFILE``.
+
+    Per ADR-0008 the local profile defaults to Ollama serving ``llama3.1:8b``;
+    the model and connection parameters are overridable via the ``LOCAL_LLM_*``
+    env vars without touching code. Phase 9 will add an Azure OpenAI adapter
+    behind the same ``LLMPort``.
+    """
+    profile = _profile()
+    if profile == "local":
+        from uae_rag.adapters.local.llm import OllamaLLM
+
+        return OllamaLLM()
+    if profile == "azure":
+        raise NotImplementedError("Azure OpenAI LLM adapter ships in Phase 9")
+    raise ValueError(f"Unknown ADAPTER_PROFILE: {profile!r}")
+
+
 def get_reranker() -> RerankerPort:
     """Return the reranker adapter selected by ``ADAPTER_PROFILE``.
 
@@ -105,4 +129,4 @@ def get_reranker() -> RerankerPort:
     raise ValueError(f"Unknown ADAPTER_PROFILE: {profile!r}")
 
 
-__all__ = ["get_embeddings", "get_reranker", "get_retriever", "get_vector_index"]
+__all__ = ["get_embeddings", "get_llm", "get_reranker", "get_retriever", "get_vector_index"]
