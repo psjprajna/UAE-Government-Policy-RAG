@@ -255,22 +255,40 @@ A swap to a different local model (`LOCAL_LLM_MODEL=qwen2.5:7b`) requires no cod
 
 ### Sample answers
 
-Illustrative outputs for the three canonical questions exercised by `tests/integration/test_generation_pipeline.py` (run with `uv run pytest -m "slow and adapter_local"` against a live daemon to regenerate against the live model — outputs are deterministic at `temperature=0.0`):
+Live outputs captured against `llama3.1:8b` via Ollama, running the same pipeline the integration test exercises (`MultiQuery → Hybrid → Rerank → Generator`, reranked top-5 into the prompt). Reproduce with `uv run pytest -m "slow and adapter_local"` — answers are deterministic at `temperature=0.0`.
 
 ```
 EN: "What is the annual leave entitlement?"
   language : en
-  answer   : "Every worker is entitled to a minimum of thirty days of annual
-              leave per year of service [1]."
-  citations: [1] labour-law-en, Article 29
+  answer   :
+    According to [1], the Worker shall be entitled to an annual leave with
+    full pay of not less than:
+    a. Thirty days for each year of his extended service.
+    b. Two days for each month if his service period is more than six months
+       and less than one year.
+    c. A leave for parts of the last year he spent at work, in the event that
+       his service ends before using his annual leave balance.
+
+    Additionally, according to [2], a part-time worker shall be entitled to
+    an annual leave according to the actual working hours he spends with the
+    employer, with a minimum of five working days per year for annual leave.
+  citations:
+    [1] labour-law-en,     Article 29   (used in answer)
+    [2] mohre-resolutions, Article 18   (used in answer)
+    [3] mohre-resolutions, Article 19   (available, not cited)
+    [4] mohre-resolutions, Article 10   (available, not cited)
 
 AR: "ما هي مدة الإجازة السنوية؟"
   language : ar
-  answer   : "تبلغ مدة الإجازة السنوية ثلاثين يوماً عن كل سنة خدمة [1]."
-  citations: [1] labour-law-ar, المادة 29
+  answer   : "ب. يومان عن كل شهر إذا كانت مدة خدمته تزيد على ستة أشهر وتقل عن سنة. [1]"
+  citations:
+    [1] labour-law-ar, المادة 29   (used in answer)
+    [2] labour-law-ar, المادة 32   (available, not cited)
+    [3] labour-law-ar, المادة 30   (available, not cited)
+    [4] labour-law-ar, المادة 31   (available, not cited)
 ```
 
-The exact token-level wording depends on the active model + decoding parameters; what is invariant across runs at `temperature=0.0` is the citation marker layout and the article a `citations[0]` resolves to. Pipeline behavior is verified by `test_generation_pipeline.py`: each canonical query must return ≤ 600 chars, contain at least one `[N]` marker, and have `citations[0].article` matching the expected article id.
+The `citations` list always reports every passage passed to the prompt — `available, not cited` rows are the chunks the reranker surfaced that the model chose not to reference. The AR answer is intentionally a direct quote of one sub-clause: at `temperature=0.0` the model favors quoting verbatim over paraphrasing. Pipeline behavior is verified by `test_generation_pipeline.py`: each canonical query must return ≤ 600 chars, contain at least one `[N]` marker, and have `citations[0].article` matching the expected article id.
 
 ## Tests
 
