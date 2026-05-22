@@ -123,12 +123,6 @@ def pipeline() -> _Pipeline:
         llm.generate("Reply with the single word: ready", max_output_tokens=8)
     except LLMUnavailableError as exc:
         pytest.skip(f"Ollama daemon / model unavailable: {exc}")
-    except ConnectionError as exc:
-        # ollama>=0.6 raises a builtin ConnectionError (instead of httpx.ConnectError)
-        # when the daemon isn't reachable; the local adapter doesn't yet wrap it.
-        # Skipping cleanly here matches the spec's "auto-skip when Ollama daemon
-        # unreachable" intent without requiring an adapter change in this slice.
-        pytest.skip(f"Ollama daemon unreachable: {exc}")
 
     embedder = config.get_embeddings()
     index = config.get_vector_index(persist_dir=_CHROMA_DIR, embedder=embedder)

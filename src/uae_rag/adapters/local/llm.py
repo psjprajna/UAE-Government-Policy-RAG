@@ -16,9 +16,11 @@ or at ``OllamaLLM()`` time. Mirrors the lazy-load pattern in
 ``adapters/local/reranker.SentenceTransformersReranker``.
 
 Transport failures (``ollama.ResponseError``, ``httpx.ConnectError``,
-``httpx.ReadTimeout``) are wrapped in ``LLMUnavailableError`` with the
-original exception preserved on ``__cause__``. The user-visible message omits
-the configured host so logs don't leak internal infrastructure.
+``httpx.ReadTimeout``, and the builtin ``ConnectionError`` that ``ollama>=0.6``
+re-raises when the daemon is unreachable) are wrapped in
+``LLMUnavailableError`` with the original exception preserved on ``__cause__``.
+The user-visible message omits the configured host so logs don't leak internal
+infrastructure.
 """
 
 from __future__ import annotations
@@ -93,6 +95,8 @@ class OllamaLLM:
         except httpx.ReadTimeout as exc:
             raise LLMUnavailableError(f"LLM timed out after {self.timeout_s:.0f}s") from exc
         except httpx.HTTPError as exc:
+            raise LLMUnavailableError("LLM transport error") from exc
+        except ConnectionError as exc:
             raise LLMUnavailableError("LLM transport error") from exc
         except ollama.ResponseError as exc:
             raise LLMUnavailableError(f"LLM returned an error (status {exc.status_code})") from exc

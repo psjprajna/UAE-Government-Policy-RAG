@@ -235,6 +235,24 @@ def test_connect_error_raises_llm_unavailable(monkeypatch: pytest.MonkeyPatch) -
     assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
 
 
+def test_builtin_connection_error_raises_llm_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``ollama>=0.6`` re-raises builtin ``ConnectionError`` on daemon-down; adapter must wrap it."""
+
+    def raise_builtin_connect(self: ollama.Client, **kwargs: Any) -> _StubResponse:
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(ollama.Client, "generate", raise_builtin_connect)
+
+    adapter = OllamaLLM()
+
+    with pytest.raises(LLMUnavailableError) as exc_info:
+        adapter.generate("p")
+
+    assert isinstance(exc_info.value.__cause__, ConnectionError)
+
+
 def test_read_timeout_raises_llm_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """``httpx.ReadTimeout`` → ``LLMUnavailableError`` with a 'timed out' message."""
 
