@@ -29,6 +29,10 @@ models/
 *.safetensors
 *.bin
 
+# Eval run outputs (large, per-run regenerable); allow-list the committed baseline
+data/eval_runs/*
+!data/eval_runs/baseline/
+
 # Editor
 .vscode/
 .idea/
