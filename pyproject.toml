@@ -30,6 +30,9 @@ dev = [
 fetch = [
     "playwright>=1.40",
 ]
+ui = [
+    "streamlit>=1.40",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -40,7 +43,7 @@ packages = ["src/uae_rag"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "ui"]
 addopts = "-ra --strict-markers"
 markers = [
     "slow: marks tests as slow (run with --runslow)",
