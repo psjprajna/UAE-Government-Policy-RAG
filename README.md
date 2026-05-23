@@ -2,7 +2,7 @@
 
 A retrieval-augmented question-answering service over public UAE government policy documents — UAE Labour Law (Federal Law No. 33 of 2021), MOHRE regulations, and UAE Visa regulations. Accepts questions in Arabic or English and returns grounded answers with article-level citations.
 
-> **Current capability (through Phase 7):** `POST /query` is now wired end-to-end. FastAPI's `lifespan` composes `MultiQueryRetriever → HybridRetriever → RerankRetriever → Generator` once at server boot (sub-second to a few seconds — adapter construction is side-effect-light, `@cached_property` defers every weight load); the first request pays the cold model-load tax (e5-large + BGE-v2-m3 + Ollama warmup), warm requests run retrieval + rerank in under a second and ~30–120 s of LLM generation depending on answer length and hardware. The wire `Citation` carries the in-answer `[N]` marker deduped on `(source, article)`; transport failures from the local LLM surface as `503 {"detail": "LLM unavailable"}`, whitespace-only questions surface as `400` with the upstream exception's own message verbatim, and validation failures surface as `422` from Pydantic. Walking-skeleton building blocks remain: reproducible corpus (one-command fetcher with a committed SHA-256 registry at `data/registry.json`, Playwright + chromium for JS-challenged portals, stdlib `urllib` for direct-PDF sources), heading-aware PDF parsing (pdfplumber for English, pypdfium2 for Arabic; detects `Article (N)` / `المادة (N)` headings) and chunking (deterministic id, breadcrumb-prefixed text, injectable token counter, sentence-level split for overflows), a persistent ChromaDB index of the full 285-chunk corpus embedded with `intfloat/multilingual-e5-large` (swap models via `LOCAL_EMBEDDINGS_*` env vars; the index refuses an incompatible swap unless re-run with `--reset`), a live hybrid retriever (BM25 + dense, fused with Reciprocal Rank Fusion at k=60), a `BAAI/bge-reranker-v2-m3` cross-encoder that re-scores the hybrid top-20, a multi-query rewriter that expands one question into N LLM-generated phrasings and fuses their per-variation hit lists via the same RRF algebra, and a `Generator` that detects the question's language (English / Arabic, via `lingua-language-detector`), renders the language-appropriate prompt, calls a local Ollama `llama3.1:8b` (ADR-0008) behind a swap-ready `LLMPort`, and returns a grounded answer with bracketed citations. Empty `hits` short-circuits to a deterministic refusal phrase in the detected language without calling the LLM. Re-runs of the fetcher are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift.
+> **Current capability (through Phase 8):** `POST /query` is wired end-to-end and the pipeline has a measured RAGAS baseline. FastAPI's `lifespan` composes `MultiQueryRetriever → HybridRetriever → RerankRetriever → Generator` once at server boot (sub-second to a few seconds — adapter construction is side-effect-light, `@cached_property` defers every weight load); the first request pays the cold model-load tax (e5-large + BGE-v2-m3 + Ollama warmup), warm requests run retrieval + rerank in under a second and ~30–120 s of LLM generation depending on answer length and hardware. The wire `Citation` carries the in-answer `[N]` marker deduped on `(source, article)`; transport failures from the local LLM surface as `503 {"detail": "LLM unavailable"}`, whitespace-only questions surface as `400` with the upstream exception's own message verbatim, and validation failures surface as `422` from Pydantic. Walking-skeleton building blocks remain: reproducible corpus (one-command fetcher with a committed SHA-256 registry at `data/registry.json`, Playwright + chromium for JS-challenged portals, stdlib `urllib` for direct-PDF sources), heading-aware PDF parsing (pdfplumber for English, pypdfium2 for Arabic; detects `Article (N)` / `المادة (N)` headings) and chunking (deterministic id, breadcrumb-prefixed text, injectable token counter, sentence-level split for overflows), a persistent ChromaDB index of the full 285-chunk corpus embedded with `intfloat/multilingual-e5-large` (swap models via `LOCAL_EMBEDDINGS_*` env vars; the index refuses an incompatible swap unless re-run with `--reset`), a live hybrid retriever (BM25 + dense, fused with Reciprocal Rank Fusion at k=60), a `BAAI/bge-reranker-v2-m3` cross-encoder that re-scores the hybrid top-20, a multi-query rewriter that expands one question into N LLM-generated phrasings and fuses their per-variation hit lists via the same RRF algebra, and a `Generator` that detects the question's language (English / Arabic, via `lingua-language-detector`), renders the language-appropriate prompt, calls a local Ollama `llama3.1:8b` (ADR-0008) behind a swap-ready `LLMPort`, and returns a grounded answer with bracketed citations. Empty `hits` short-circuits to a deterministic refusal phrase in the detected language without calling the LLM. Re-runs of the fetcher are no-ops; tampered or stale files surface as a clear hash-mismatch error rather than a silent drift. Phase 8 adds `scripts/run_eval.py` (RAGAS 0.4 harness) + a 50-question EN+AR golden set + a committed baseline at `data/eval_runs/baseline/` — see Evaluation below for the numbers, limitations, and how to reproduce.
 
 ## Why this exists
 
@@ -228,7 +228,7 @@ AR: الإجازة السنوية                  █ 1       █ 1       █ 1
 
 The AR exact-reference query (`المادة 29`) is the case where BM25 wins decisively over dense — dense ranks `art-26` and `art-27` (semantically adjacent articles) above the literal match. Hybrid keeps BM25's lexical precision while picking up the dense leg's recall on phrasal queries.
 
-The reranker's contribution on this corpus isn't lifting the gold chunk — hybrid already places it at rank 1 or 2 for all four queries. What the cross-encoder *does* change is the rest of the top-3: it replaces adjacent-article noise (`art-27`, `art-33`, `art-37`) with more semantically targeted picks (`art-9`, `art-68`), reorders sub-chunks within the same article so the directly relevant slice surfaces first (AR `الإجازة السنوية` promotes `art-29#p1-p1s1-s11` over `art-29#p1-p1s12-s16`), and on the Arabic-leave query surfaces the English Article 29 chunk in the reranked top-3 — true cross-language semantic relevance, which BGE-v2-m3 is trained for. Phase 8 RAGAS will quantify the diff over the 50-question golden set.
+The reranker's contribution on this corpus isn't lifting the gold chunk — hybrid already places it at rank 1 or 2 for all four queries. What the cross-encoder *does* change is the rest of the top-3: it replaces adjacent-article noise (`art-27`, `art-33`, `art-37`) with more semantically targeted picks (`art-9`, `art-68`), reorders sub-chunks within the same article so the directly relevant slice surfaces first (AR `الإجازة السنوية` promotes `art-29#p1-p1s1-s11` over `art-29#p1-p1s12-s16`), and on the Arabic-leave query surfaces the English Article 29 chunk in the reranked top-3 — true cross-language semantic relevance, which BGE-v2-m3 is trained for. Phase 8's baseline measures the integrated pipeline (see Evaluation below); `llm_context_precision_with_reference` lands at 0.947 ± 0.125 (N=31), meaning the reranked top-K usually places the cited article high enough to drive a faithful answer. A reranker-on/off A/B is left to a follow-up slice.
 
 ## Generation (LLM + citations)
 
@@ -300,7 +300,7 @@ The `citations` list always reports every passage passed to the prompt — `avai
 | First `/query` (cold: e5-large + BGE + Ollama warmup) | ~190 s |
 | Subsequent warm `/query` | ~110–120 s (dominated by `llama3.1:8b` generation) |
 
-`MultiQueryRetriever` issues three LLM-generated query rephrasings per request (4 LLM round-trips per `/query` total: 3 variations + 1 answer generation), which is the bulk of warm-request latency. Phase 8 may parallelize the variation calls — flagged as `# TODO(perf)` in `retrieval/multi_query.py`.
+`MultiQueryRetriever` issues three LLM-generated query rephrasings per request (4 LLM round-trips per `/query` total: 3 variations + 1 answer generation), which is the bulk of warm-request latency. The Phase 8 baseline run took 5 h 45 min for 50 questions — dominated by sequential LLM calls, both retriever-side (variations) and judge-side (RAGAS). The Phase 8.5 async-`LLMPort` promotion is the planned fix; the variation-parallelization in particular is flagged as `# TODO(perf)` in `retrieval/multi_query.py`.
 
 ### EN sample (verbatim from `uvicorn` on `127.0.0.1:8001`)
 
@@ -352,17 +352,53 @@ curl -X POST http://localhost:8001/query \
 
 ## Evaluation
 
-`scripts/run_eval.py` runs the same `/query` pipeline against the 50-question EN+AR golden set (`data/golden_set.jsonl`) and scores every answer with six RAGAS metrics — `faithfulness`, `answer_relevancy`, `llm_context_precision_with_reference`, `context_recall`, `answer_correctness`, and a custom `domain_quality` AspectCritic for UAE-legal citation style. Each invocation writes a self-contained run directory `data/eval_runs/<UTC-timestamp>/` containing `results.json` (verbatim per-question records, no truncation), `summary.md` (mean ± std per metric with EN/AR and per-topic splits), `config.json` (model IDs + git SHA + golden-set SHA256 for provenance), `metrics_bar.png`, and `per_question.png`. Prerequisites: Ollama running, corpus indexed (`scripts/build_index.py`), golden set present.
+`scripts/run_eval.py` runs the same `/query` pipeline against the 50-question EN+AR golden set (`data/golden_set.jsonl`) and scores every answer with six RAGAS metrics — `faithfulness` (claims grounded in retrieved contexts), `answer_relevancy` (answer addresses the question), `llm_context_precision_with_reference` (relevant passages near top of retrieval), `context_recall` (reference fully derivable from contexts), `answer_correctness` (factual + semantic similarity to reference), and a custom `domain_quality` AspectCritic for UAE-legal citation style. Each invocation writes a self-contained run directory `data/eval_runs/<UTC-timestamp>/` containing `results.json` (verbatim per-question records, no truncation), `summary.md` (mean ± std per metric with EN/AR and per-topic splits), `config.json` (model IDs + git SHA + golden-set SHA256 for provenance), `metrics_bar.png`, and `per_question.png`. Prerequisites: Ollama running, corpus indexed (`scripts/build_index.py`), golden set present.
 
 ```bash
-uv run python scripts/run_eval.py --limit 5                     # smoke run on the first 5 golden items
-uv run python scripts/run_eval.py                               # full 50-question run (~30–60 min)
+uv run python scripts/run_eval.py --limit 5                     # smoke run on the first 5 golden items (~25 min)
+uv run python scripts/run_eval.py                               # full 50-question run (~5–6 h, default settings)
 uv run python scripts/run_eval.py --no-plot                     # skip the PNG charts
 uv run python scripts/run_eval.py --judge-profile local         # default; reuses llama3.1:8b as the judge
 uv run python scripts/run_eval.py --output-dir /tmp/eval        # parent dir; the timestamped subdir is appended
 ```
 
-Exit codes: `0` if at least one question scored; `1` on warmup failure or if every question errored; `2` on bad CLI usage. The default `local` judge profile reuses the answerer LLM (`llama3.1:8b`) — a known self-bias caveat to be documented in ADR-0009 alongside the Slice C baseline numbers.
+Exit codes: `0` if at least one question scored; `1` on warmup failure or if every question errored; `2` on bad CLI usage. The default `local` judge profile reuses the answerer LLM (`llama3.1:8b`) — a known self-bias caveat (see Limitations below).
+
+### Baseline — `data/eval_runs/baseline/`
+
+Full 50-question run on **2026-05-23** against the live local stack. Run config: answerer + judge `llama3.1:8b`, embedder `intfloat/multilingual-e5-large`, reranker `BAAI/bge-reranker-v2-m3`, RAGAS 0.4.3, golden-set SHA256 `6999a9fa…`, commit `528162c`. Wall-clock **5 h 45 min**, 50/50 questions completed without a hard error. The baseline directory carries `results.json` (verbatim per-question records, 608 KB), `summary.md`, `config.json`, and the two PNG charts; the run is gitignored everywhere except `baseline/` so a reader can re-grade any question without replaying.
+
+![RAGAS metrics — overall mean ± std error](data/eval_runs/baseline/metrics_bar.png)
+
+| Metric | Overall mean ± std | N / 50 | EN mean | AR mean |
+|---|---:|---:|---:|---:|
+| faithfulness | 0.826 ± 0.259 | 27 | 0.830 (N=13) | 0.821 (N=14) |
+| answer_relevancy | 0.845 ± 0.072 | 40 | 0.893 (N=23) | 0.781 (N=17) |
+| llm_context_precision_with_reference | 0.947 ± 0.125 | 31 | 0.925 (N=17) | 0.973 (N=14) |
+| context_recall | 0.883 ± 0.249 | 46 | 0.881 (N=27) | 0.886 (N=19) |
+| answer_correctness | 0.665 ± 0.137 | 27 | 0.685 (N=17) | 0.631 (N=10) |
+| domain_quality | 1.000 | 1 | 1.000 (N=1) | — (N=0) |
+
+Per topic (mean (N)):
+
+| Metric | labour-law | mohre | visa |
+|---|---:|---:|---:|
+| faithfulness | 0.838 (20) | 0.840 (6) | 0.500 (1) |
+| answer_relevancy | 0.821 (26) | 0.902 (11) | 0.846 (3) |
+| llm_context_precision_with_reference | 0.962 (22) | 0.867 (6) | 1.000 (3) |
+| context_recall | 0.908 (29) | 0.885 (12) | 0.733 (5) |
+| answer_correctness | 0.637 (18) | 0.723 (8) | 0.717 (1) |
+| domain_quality | 1.000 (1) | — (0) | — (0) |
+
+The 50×6 per-question heatmap is at `data/eval_runs/baseline/per_question.png`; every cell traces back to a `results.json` record so any score is auditable down to the exact prompt, retrieved chunks, generated answer, and judge call.
+
+### Limitations
+
+- **Self-bias.** `llama3.1:8b` serves as both answerer and judge (the only $0 configuration; see ADR-0008). The model rarely rates its own answers harshly on faithfulness or relevance — treat the baseline as a *calibration*, not a quality ceiling. Phase 9's Azure OpenAI `gpt-4o` adapter plugs into the same `RAGAS_JUDGE_PROFILE=openai` slot for an unbiased comparison; the slot currently raises `NotImplementedError`.
+- **`domain_quality` is essentially N=0.** The custom AspectCritic uses a strict-JSON envelope that `llama3.1:8b` consistently fails to honour (`OutputParserException(Invalid json output)` and `TimeoutError` on every call we inspected). One EN labour-law question's score came through (1.000); the other 49 are `null`. Structural small-model limitation, not a pipeline defect — resolves with the Phase 9 GPT-4o judge.
+- **N < 50 on every metric.** RAGAS coerces failed judge calls to `null` per-metric, per-question. The loss concentrates on metrics that require the judge to extract structured facts (claim-level decomposition for `faithfulness`, key-fact set comparison for `answer_correctness`); simpler relevance/recall prompts survive much better (`context_recall` at N=46, `answer_relevancy` at N=40). The bumped 900 s executor timeout and `max_retries=1` (see commit `528162c`) trade retry cost for fail-fast on these structural failures; without them ~3 metrics were N=0.
+- **`visa` topic has thin coverage** (N=1–5 per metric). The ICP Services Guide is page-structured (no Article-N headings), so golden questions land on `mode="fallback"` chunks and the judge has less structure to grade against. Expanding the golden set's visa rows is the natural follow-up.
+- **Calibration only.** Per the `acceptance-thresholds` discipline, no numeric quality bar is baked in (e.g. "faithfulness ≥ 0.8"). The baseline IS the calibration; future moves (ADR-0008's deferred Qwen2.5 swap, Phase 9's GPT-4o adapter, the Phase 8.5 async-`LLMPort` promotion) are measured against deltas from this number. Full rationale in `.claude/docs/adrs/0009-ragas-metrics-and-judge.md`.
 
 ## Tests
 
