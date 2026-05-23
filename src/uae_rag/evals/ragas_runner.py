@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -256,9 +257,7 @@ def _extract_row_scores(
     return out
 
 
-def _to_context_records(
-    hits: Sequence[RetrievalHit], payload: Any
-) -> tuple[ContextRecord, ...]:
+def _to_context_records(hits: Sequence[RetrievalHit], payload: Any) -> tuple[ContextRecord, ...]:
     """Pair retrieved hits with citation markers; missing markers fall back to '[i]'."""
     marker_by_chunk = {c.chunk_id: c.marker for c in payload.citations if hasattr(c, "chunk_id")}
     records: list[ContextRecord] = []
@@ -316,11 +315,65 @@ def _assert_determinism_guard(pipeline: ComposedPipeline) -> None:
         )
 
 
+DEFAULT_METRIC_NAMES: tuple[str, ...] = (
+    "faithfulness",
+    "answer_relevancy",
+    "llm_context_precision_with_reference",
+    "context_recall",
+    "answer_correctness",
+    "domain_quality",
+)
+
+_ASPECT_CRITIC_DEFINITION = (
+    "The answer cites at least one specific UAE legal article number in "
+    "bracket notation (e.g. '[1]'), uses formal authoritative language "
+    "appropriate for a legal/HR audience, and does not introduce "
+    "qualifications or marketing language not supported by the cited "
+    "passages."
+)
+
+
+def build_default_metrics(judge_llm: LLMPort, judge_embeddings: EmbeddingsPort) -> tuple[Any, ...]:
+    """Instantiate the six production RAGAS metrics against the wrapped judge.
+
+    One source of truth for the CLI runner and the integration test.
+    Deprecation warnings from RAGAS 0.4's path migration to ``.collections``
+    are suppressed at import time; the old-style classes still work and match
+    the spec's metric inventory.
+    """
+    wrapped_llm = RagasLLMWrapper(judge_llm)
+    wrapped_embeddings = RagasEmbeddingsWrapper(judge_embeddings)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        from ragas.metrics import (
+            AnswerCorrectness,
+            AnswerRelevancy,
+            AspectCritic,
+            Faithfulness,
+            LLMContextPrecisionWithReference,
+            LLMContextRecall,
+        )
+    return (
+        Faithfulness(llm=wrapped_llm),
+        AnswerRelevancy(llm=wrapped_llm, embeddings=wrapped_embeddings),
+        LLMContextPrecisionWithReference(llm=wrapped_llm),
+        LLMContextRecall(llm=wrapped_llm),
+        AnswerCorrectness(llm=wrapped_llm, embeddings=wrapped_embeddings),
+        AspectCritic(
+            name="domain_quality",
+            definition=_ASPECT_CRITIC_DEFINITION,
+            llm=wrapped_llm,
+        ),
+    )
+
+
 __all__ = [
+    "DEFAULT_METRIC_NAMES",
     "CitationRecord",
     "ContextRecord",
     "EvaluationResult",
     "ResultRecord",
     "RunConfig",
+    "build_default_metrics",
     "run_evaluation",
 ]
