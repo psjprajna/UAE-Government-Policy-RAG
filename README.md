@@ -350,6 +350,20 @@ curl -X POST http://localhost:8001/query \
 - **Pydantic validation.** Empty or oversized (>2000 chars) `question` returns `422` before the handler runs.
 - **Empty corpus / retrieval miss.** `Generator.generate` short-circuits to the language-specific refusal phrase with an empty citations list — `200 OK`, never a 500.
 
+## Evaluation
+
+`scripts/run_eval.py` runs the same `/query` pipeline against the 50-question EN+AR golden set (`data/golden_set.jsonl`) and scores every answer with six RAGAS metrics — `faithfulness`, `answer_relevancy`, `llm_context_precision_with_reference`, `context_recall`, `answer_correctness`, and a custom `domain_quality` AspectCritic for UAE-legal citation style. Each invocation writes a self-contained run directory `data/eval_runs/<UTC-timestamp>/` containing `results.json` (verbatim per-question records, no truncation), `summary.md` (mean ± std per metric with EN/AR and per-topic splits), `config.json` (model IDs + git SHA + golden-set SHA256 for provenance), `metrics_bar.png`, and `per_question.png`. Prerequisites: Ollama running, corpus indexed (`scripts/build_index.py`), golden set present.
+
+```bash
+uv run python scripts/run_eval.py --limit 5                     # smoke run on the first 5 golden items
+uv run python scripts/run_eval.py                               # full 50-question run (~30–60 min)
+uv run python scripts/run_eval.py --no-plot                     # skip the PNG charts
+uv run python scripts/run_eval.py --judge-profile local         # default; reuses llama3.1:8b as the judge
+uv run python scripts/run_eval.py --output-dir /tmp/eval        # parent dir; the timestamped subdir is appended
+```
+
+Exit codes: `0` if at least one question scored; `1` on warmup failure or if every question errored; `2` on bad CLI usage. The default `local` judge profile reuses the answerer LLM (`llama3.1:8b`) — a known self-bias caveat to be documented in ADR-0009 alongside the Slice C baseline numbers.
+
 ## Tests
 
 ```bash
