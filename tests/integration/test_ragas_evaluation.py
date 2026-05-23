@@ -15,7 +15,6 @@ calibration is the Slice C baseline number written to ``baseline/``.
 from __future__ import annotations
 
 import importlib.util
-import warnings
 from pathlib import Path
 
 import pytest
@@ -23,7 +22,7 @@ import pytest
 from uae_rag import config
 from uae_rag.evals.golden import load_golden
 from uae_rag.evals.pipeline import compose_pipeline
-from uae_rag.evals.ragas_runner import RunConfig, run_evaluation
+from uae_rag.evals.ragas_runner import RunConfig, build_default_metrics, run_evaluation
 from uae_rag.ports import LLMUnavailableError
 
 pytestmark = [pytest.mark.adapter_local, pytest.mark.slow]
@@ -42,13 +41,6 @@ _EXPECTED_METRIC_NAMES = (
     "context_recall",
     "answer_correctness",
     "domain_quality",
-)
-_ASPECT_CRITIC_DEFINITION = (
-    "The answer cites at least one specific UAE legal article number in "
-    "bracket notation (e.g. '[1]'), uses formal authoritative language "
-    "appropriate for a legal/HR audience, and does not introduce "
-    "qualifications or marketing language not supported by the cited "
-    "passages."
 )
 
 
@@ -70,36 +62,6 @@ def _skip_unless_eval_stack_ready() -> None:
         pytest.skip(f"golden set has only {len(items)} rows (<{_FIRST_N})")
 
 
-def _build_six_metrics(judge_llm, judge_embeddings):
-    """Instantiate the six production metrics against wrapped judge + embeddings."""
-    from uae_rag.evals.wrappers import RagasEmbeddingsWrapper, RagasLLMWrapper
-
-    wrapped_llm = RagasLLMWrapper(judge_llm)
-    wrapped_embeddings = RagasEmbeddingsWrapper(judge_embeddings)
-
-    # Deprecation warnings come from RAGAS 0.4's path migration to .collections;
-    # the old-style classes still work and match the spec's metric inventory.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        from ragas.metrics import (
-            AnswerCorrectness,
-            AnswerRelevancy,
-            AspectCritic,
-            Faithfulness,
-            LLMContextPrecisionWithReference,
-            LLMContextRecall,
-        )
-
-    return [
-        Faithfulness(llm=wrapped_llm),
-        AnswerRelevancy(llm=wrapped_llm, embeddings=wrapped_embeddings),
-        LLMContextPrecisionWithReference(llm=wrapped_llm),
-        LLMContextRecall(llm=wrapped_llm),
-        AnswerCorrectness(llm=wrapped_llm, embeddings=wrapped_embeddings),
-        AspectCritic(name="domain_quality", definition=_ASPECT_CRITIC_DEFINITION, llm=wrapped_llm),
-    ]
-
-
 @pytest.fixture(scope="module")
 def evaluation_result():
     """Compose the pipeline, run RAGAS on the first 5 golden questions, cache the result."""
@@ -113,7 +75,7 @@ def evaluation_result():
 
     judge_llm = config.get_judge_llm()
     judge_embeddings = config.get_embeddings()
-    metrics = _build_six_metrics(judge_llm, judge_embeddings)
+    metrics = build_default_metrics(judge_llm, judge_embeddings)
     items = load_golden(_GOLDEN_PATH)[:_FIRST_N]
     run_config = RunConfig(
         adapter_profile="local",
