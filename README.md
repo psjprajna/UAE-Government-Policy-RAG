@@ -364,6 +364,30 @@ uv run python scripts/run_eval.py --output-dir /tmp/eval        # parent dir; th
 
 Exit codes: `0` if at least one question scored; `1` on warmup failure or if every question errored; `2` on bad CLI usage. The default `local` judge profile reuses the answerer LLM (`llama3.1:8b`) — a known self-bias caveat to be documented in ADR-0009 alongside the Slice C baseline numbers.
 
+## Demo UI
+
+A Streamlit single-shot Q&A page sits on top of the `/query` endpoint for non-engineer qualitative review.
+
+```bash
+uv sync --extra dev --extra ui
+# Terminal 1 — API
+uv run uvicorn uae_rag.api.main:app
+# Terminal 2 — UI (defaults to http://127.0.0.1:8000; override with UAE_RAG_API_BASE)
+uv run streamlit run ui/streamlit_app.py
+```
+
+Open `http://localhost:8501`, type a question (EN or AR), click **Ask**, and read the language-tagged grounded answer with per-citation expanders. The first request pays the LLM cold-start (~190 s); subsequent requests are fast.
+
+### Playwright smoke
+
+```bash
+uv sync --extra dev --extra ui --extra fetch
+uv run playwright install chromium                       # one-time per machine
+uv run pytest tests/e2e/test_streamlit_ui.py -m "adapter_local and slow" -v
+```
+
+The fixture launches `uvicorn` and `streamlit` on ephemeral 127.0.0.1 ports, warms the LLM cold path once, then runs two browser checks: the page loads, and asking "What is the annual leave entitlement?" returns an answer containing the `[1]` citation marker plus a `labour-law-en` expander row under **Citations**. Auto-skipped when Ollama, the corpus, ChromaDB, or `sentence_transformers` is missing.
+
 ## Tests
 
 ```bash
