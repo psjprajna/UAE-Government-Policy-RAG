@@ -1,0 +1,29 @@
+{
+  "adapter_profile": "local",
+  "judge_profile": "local",
+  "embedder_model_id": "intfloat/multilingual-e5-large",
+  "reranker_model_id": "bge-reranker-v2-m3",
+  "answerer_model_id": "llama3.1:8b",
+  "judge_model_id": "llama3.1:8b",
+  "ragas_version": "0.4.3",
+  "metrics_used": [
+    "faithfulness",
+    "answer_relevancy",
+    "llm_context_precision_with_reference",
+    "context_recall",
+    "answer_correctness",
+    "domain_quality"
+  ],
+  "git_sha": "528162c29e599b74e8f43cd81160ca9f178442c0",
+  "golden_set_sha256": "6999a9faa596c0a3c47e67961c19da1d13cbfb13b3e6f279864df58d4804eac9",
+  "cli_args": {
+    "limit": null,
+    "judge_profile": "local",
+    "no_plot": false,
+    "golden_set": "data/golden_set.jsonl",
+    "output_dir": "data/eval_runs"
+  },
+  "started_at": "2026-05-23T17:02:23.170201+00:00",
+  "ended_at": "2026-05-23T22:47:08.858483+00:00",
+  "duration_seconds": 20685
+}
