@@ -390,6 +390,37 @@ def test_run_evaluation_determinism_guard_rejects_nonzero_temperature() -> None:
         )
 
 
+def test_run_evaluation_passes_run_config_with_extended_timeout_and_no_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The RAGAS executor config must override RAGAS defaults — a regression here
+    silently corrupts baseline runs (3 of 6 metrics returned N=0 with the
+    default 180s timeout; default 10 retries pushed full-50 runtime to ~12 h)."""
+    from ragas.run_config import RunConfig as RagasRunConfig
+
+    captured: dict[str, Any] = {}
+
+    def fake_evaluate(dataset: Any, **kwargs: Any) -> _FakeRagasResult:
+        captured.update(kwargs)
+        return _FakeRagasResult(scores=[{"faithfulness": 0.5}])
+
+    monkeypatch.setattr("uae_rag.evals.ragas_runner.ragas.evaluate", fake_evaluate)
+
+    run_evaluation(
+        pipeline=_pipeline(),
+        golden_items=[_golden()],
+        judge_llm=FakeLLM(),
+        judge_embeddings=FakeEmbeddings(),
+        metrics=[_FakeMetric("faithfulness")],
+        config=_config(),
+    )
+
+    run_config = captured.get("run_config")
+    assert isinstance(run_config, RagasRunConfig)
+    assert run_config.timeout >= 900
+    assert run_config.max_retries == 1
+
+
 def test_run_evaluation_progress_callback_invoked_per_item(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_evaluate(dataset: Any, **kwargs: Any) -> _FakeRagasResult:
         return _FakeRagasResult(scores=[{"faithfulness": 0.5}])

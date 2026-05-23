@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import ragas
+from ragas.run_config import RunConfig as RagasRunConfig
 
 from uae_rag.evals.golden import GoldenItem
 from uae_rag.evals.pipeline import ComposedPipeline
@@ -42,6 +43,18 @@ logger = logging.getLogger(__name__)
 
 _RETRIEVE_TOP_K = 5
 _LLM_UNAVAILABLE_ERROR_TAG = "LLM unavailable"
+# RAGAS's default executor timeout (180s) fires on most context-precision /
+# answer-correctness / aspect-critic calls when the judge is llama3.1:8b on
+# CPU — smoke run 2026-05-23T13-57-28Z hit N=0 on 3 of 6 metrics. 900s clears
+# the observed tail; revisit if a faster judge (GPT-4o via Phase 9) lands.
+_RAGAS_JUDGE_TIMEOUT_S = 900
+# RAGAS retries failed judge calls up to max_retries=10 by default. For
+# structural failures (small-model JSON parse errors on the AspectCritic per
+# the prompt-discipline lesson) every retry burns ~timeout seconds without
+# changing the outcome — smoke run 2026-05-23T15-04-28Z extrapolated to
+# ~11-12 h for the full 50. One attempt lets the failure surface as null
+# fast; full-baseline projection drops to ~5-6 h.
+_RAGAS_MAX_RETRIES = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +243,10 @@ def _score_with_ragas(
                 embeddings=wrapped_embeddings,
                 show_progress=False,
                 raise_exceptions=False,
+                run_config=RagasRunConfig(
+                    timeout=_RAGAS_JUDGE_TIMEOUT_S,
+                    max_retries=_RAGAS_MAX_RETRIES,
+                ),
             )
         )
     except Exception as exc:
